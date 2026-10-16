@@ -12,7 +12,7 @@ const entry = (name: string, type = 'file', size = 12) => ({
 });
 
 // 只在测试浏览器内模拟 API/协议，不访问真实主机、不增加生产认证绕过。
-export async function fileFixture(page: Page, options: { firstSeen?: boolean; credentialError?: boolean; noHosts?: boolean; holdUpload?: boolean } = {}) {
+export async function fileFixture(page: Page, options: { firstSeen?: boolean; credentialError?: boolean; noHosts?: boolean; holdUpload?: boolean; waitUntil?: 'load' | 'domcontentloaded' } = {}) {
   const hosts = options.noHosts ? [] : [host('alpha', 'Tokyo production', '192.0.2.10'), host('beta', 'Singapore backup', '192.0.2.20')];
   const directories = new Map([
     ['/', [entry('root', 'directory')]],
@@ -103,7 +103,7 @@ export async function fileFixture(page: Page, options: { firstSeen?: boolean; cr
       }
     });
   });
-  await page.goto('/');
+  await page.goto('/', { waitUntil: options.waitUntil ?? 'load' });
   await page.locator('#rail-files').click();
   return { hosts, calls, sshSockets, sftpSockets, uploaded, directories };
 }

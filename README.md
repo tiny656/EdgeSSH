@@ -157,6 +157,9 @@ EdgeSSH 把散落各处的服务器连接信息，收进统一的主机库。
 - 密码认证
 - keyboard-interactive
 - OpenSSH 私钥认证
+- 内置 FiraCode Nerd Font Mono（常规 / 粗体），支持 oh-my-zsh / Powerlevel10k 图标
+
+终端使用 [Nerd Fonts v3.5.1 的 FiraCode](https://github.com/ryanoasis/nerd-fonts/tree/v3.5.1/patched-fonts/FiraCode)，字体和许可证随站点同源部署，不依赖外部 CDN，也不需要在 Debian VPS 或本机安装字体。首次加载期间终端仍可使用；字体就绪后会自动重绘并同步终端尺寸。加载失败会显示提示并保留备用字体，可刷新页面重试。使用 Nerd Fonts v2 旧字形编号的主题需要更新至兼容 v3 的版本。
 
 ![EdgeSSH 终端命令工作流](docs/images/showcase/03-terminal-command-workflow.png)
 

@@ -1171,6 +1171,29 @@ function fitTerminal(send = true): void {
   });
 }
 
+async function loadTerminalFont(): Promise<void> {
+  const family = '"FiraCode Nerd Font Mono"';
+  try {
+    const fonts = await Promise.all(
+      [terminal.options.fontWeight, terminal.options.fontWeightBold].map((weight) =>
+        document.fonts.load(`${weight} ${terminal.options.fontSize}px ${family}`)),
+    );
+    if (fonts.some((faces) => faces.length === 0)) throw new Error('FiraCode Nerd Font Mono is not registered.');
+  } catch {
+    const message = bilingual(
+      'FiraCode Nerd Font 加载失败，已使用备用字体，部分图标可能无法显示。请刷新页面重试。',
+      'FiraCode Nerd Font could not be loaded. Using a fallback font; some icons may be missing. Reload the page to retry.',
+    );
+    event(message, 'status', true);
+    toast(message, 'error');
+    return;
+  }
+  // Changing the family after both weights load makes xterm remeasure instead of caching fallback metrics.
+  terminal.options.fontFamily = `${family}, ${terminal.options.fontFamily}`;
+  terminal.refresh(0, terminal.rows - 1);
+  fitTerminal(true);
+}
+
 function setPanelOpen(open: boolean): void {
   const view = resolveConnectionPanel(open);
   panelOpen = view.expanded;
@@ -2159,6 +2182,7 @@ async function initialize(): Promise<void> {
   applyURLParameters();
   // 两个视图共用指纹确认与通知，不能随隐藏的终端容器一起消失。
   document.body.append(ui.hostKeyDialog, ui.toastRegion);
+  void loadTerminalFont();
   filePage = new FilePage(ui.fileManagerPanel, {
     connect: async (host) => {
       const loading = applyProfile(host);
