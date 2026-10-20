@@ -37,12 +37,13 @@ export async function prepareEncryptionSecret(
   if (settings.secrets.ENCRYPTION_KEY) return { ENCRYPTION_KEY: settings.secrets.ENCRYPTION_KEY };
   const path = `/accounts/${settings.accountId}/d1/database/${database.uuid}/query`;
   const tables = await api.request<{ results: { name: string }[]; success: boolean }[]>(path, 'POST', {
-    sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hosts'",
+    sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('hosts', 'snippets', 'forward_rules', 'keychain')",
   });
   if (tables.some((query) => !query.success)) throw new Error('无法确认 D1 状态，停止生成密钥。');
-  if (tables[0].results.length) {
+  for (const { name } of tables[0].results) {
     const rows = await api.request<{ results: unknown[]; success: boolean }[]>(path, 'POST', {
-      sql: 'SELECT 1 FROM hosts LIMIT 1',
+      // 表名仅来自上方固定白名单；只有密钥链、没有主机的工作区也不能换加密密钥。
+      sql: `SELECT 1 FROM ${name} LIMIT 1`,
     });
     if (rows.some((query) => !query.success)) throw new Error('无法确认 D1 状态，停止生成密钥。');
     if (rows[0].results.length) {

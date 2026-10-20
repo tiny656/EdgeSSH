@@ -3,6 +3,8 @@ import type { HostGlobe } from './globe';
 import type { FilePage } from './file-page';
 import type { Snippets } from './snippets';
 import { ForwardPage } from './forward-page';
+import { createElement, KeyRound } from 'lucide';
+import { Keychain, fillKeychainSelect } from './keychain';
 import { countryFlag } from './flags';
 import { systemIcon } from './os-icons';
 import './dashboard.css';
@@ -10,6 +12,7 @@ import './dashboard.css';
 interface DashboardActions {
   files: FilePage;
   snippets: Snippets;
+  keychain: Keychain;
   refresh(): Promise<CloudHost[]>;
   connect(host: CloudHost): Promise<void>;
   quickConnect(): void;
@@ -59,6 +62,7 @@ export class Dashboard {
           <button class="rail-item" id="rail-hosts">${icon('server')}<span>主机</span></button>
           <button class="rail-item" id="rail-files">${icon('folder')}<span>文件管理</span></button>
           <button class="rail-item" id="rail-snippets">${icon('snippets')}<span>代码片段</span></button>
+          <button class="rail-item" id="rail-keychain"><span>密钥链</span></button>
           <button class="rail-item" id="rail-forward">${icon('forward')}<span>端口转发</span></button>
           <button class="rail-item" id="quick-connect">${icon('terminal')}<span>快速连接</span></button>
           <span class="rail-security" title="管理员身份认证">${icon('shield')}<span id="auth-provider-label">身份<br>保护</span></span>
@@ -96,9 +100,11 @@ export class Dashboard {
             <label class="wide">主机地址<input name="host" maxlength="253" placeholder="IP 地址或域名" required spellcheck="false"></label>
             <label>SSH 用户名<input name="username" value="root" maxlength="128" required spellcheck="false"></label>
             <label>端口<input name="port" type="number" min="1" max="65535" value="22" required></label>
-            <label class="wide">认证方式<select name="authMethod"><option value="password">密码</option><option value="publickey">OpenSSH 私钥</option></select></label>
+            <label class="wide">认证方式<select name="authMethod"><option value="password">密码</option><option value="publickey">上传 / 填写私钥</option><option value="keychain">密钥链</option></select></label>
             <label class="wide" id="cloud-password-field">密码<input name="password" type="password" maxlength="4096" autocomplete="new-password"><small class="credential-help">密码会由 Worker 加密后保存。</small></label>
             <label class="wide" id="cloud-key-field" hidden>私钥<textarea name="privateKey" rows="5" maxlength="65536" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" spellcheck="false"></textarea><small class="credential-help">仅支持未加密的 OpenSSH 私钥。</small></label>
+            <label class="wide" id="cloud-key-file-field" hidden>私钥文件<input name="privateKeyFile" type="file" accept=".pem,.key,.openssh,text/plain"></label>
+            <label class="wide" id="cloud-keychain-field" hidden>已有密钥<select name="keychainId"><option value="">选择密钥</option></select></label>
           </div>
           <details class="host-advanced"><summary>高级设置</summary><div class="host-form-grid">
             <label class="wide">主机指纹<input name="fingerprint" placeholder="SHA256:…，首次连接时确认" maxlength="128"></label>
@@ -115,6 +121,9 @@ export class Dashboard {
     this.get('.home-layout').append(this.actions.files.root);
     this.get('.home-layout').append(this.actions.snippets.page);
     this.get('.home-layout').append(this.forwarding.root);
+    this.get('.home-layout').append(this.actions.keychain.root);
+    this.get('#rail-keychain').prepend(createElement(KeyRound));
+    this.actions.keychain.addEventListener('change', () => fillKeychainSelect(this.field('keychainId') as HTMLSelectElement, this.actions.keychain.keys));
     this.dialog = this.get<HTMLDialogElement>('#host-editor-dialog');
     this.form = this.get<HTMLFormElement>('#cloud-host-form');
     this.get('#account-action').addEventListener('click', async (event) => {
@@ -140,6 +149,7 @@ export class Dashboard {
     });
     this.get('#rail-files').addEventListener('click', () => this.showFiles());
     this.get('#rail-snippets').addEventListener('click', () => this.showSnippets());
+    this.get('#rail-keychain').addEventListener('click', () => this.showKeychain());
     this.get('#rail-forward').addEventListener('click', () => this.showForwarding());
     for (const id of ['#quick-connect', '#bottom-quick']) this.get(id).addEventListener('click', () => {
       if (this.busy || !this.actions.files.confirmLeave()) return;
@@ -147,6 +157,20 @@ export class Dashboard {
       this.openWorkspace(); this.actions.quickConnect();
     });
     this.field('authMethod').addEventListener('change', () => this.updateCredentialFields());
+    this.field('privateKeyFile').addEventListener('change', async () => {
+      const input = this.field('privateKeyFile') as HTMLInputElement;
+      const file = input.files?.[0]; input.setCustomValidity(''); if (!file) return;
+      input.setCustomValidity('正在读取私钥文件。');
+      try {
+        if (file.size > 65536) throw new Error('私钥文件不能超过 64 KiB。');
+        const text = await file.text();
+        if (this.dialog.open && input.files?.[0] === file) { this.field('privateKey').value = text; input.setCustomValidity(''); }
+      } catch (error) {
+        if (input.files?.[0] !== file) return;
+        input.setCustomValidity('私钥文件读取失败，请重新选择。');
+        this.get('#host-form-error').textContent = error instanceof Error ? error.message : '私钥读取失败。'; this.get('#host-form-error').hidden = false;
+      }
+    });
     this.form.addEventListener('submit', (event) => { event.preventDefault(); void this.save(); });
     this.get('#pause-globe').addEventListener('click', () => {
       this.paused = !this.paused;
@@ -224,6 +248,7 @@ export class Dashboard {
   }
 
   show(): void {
+    this.actions.keychain.hide();
     this.forwarding.hide();
     this.actions.files.hide();
     this.actions.snippets.hide();
@@ -236,6 +261,7 @@ export class Dashboard {
   }
 
   openWorkspace(): void {
+    this.actions.keychain.hide();
     this.forwarding.hide();
     this.actions.files.hide();
     this.actions.snippets.hide();
@@ -248,6 +274,7 @@ export class Dashboard {
   }
 
   showFiles(): void {
+    this.actions.keychain.hide();
     this.forwarding.hide();
     this.actions.snippets.hide();
     this.isHome = false; this.root.hidden = false;
@@ -261,6 +288,7 @@ export class Dashboard {
 
   showSnippets(): void {
     if (!this.actions.files.confirmLeave()) return;
+    this.actions.keychain.hide();
     this.forwarding.hide();
     // 仅切换视图，不结束 SSH；在片段页编辑后可回到同一会话。
     this.actions.files.hide();
@@ -275,6 +303,7 @@ export class Dashboard {
 
   showForwarding(): void {
     if (!this.actions.files.confirmLeave()) return;
+    this.actions.keychain.hide();
     this.actions.files.hide();
     this.actions.snippets.hide();
     this.isHome = false; this.root.hidden = false;
@@ -284,6 +313,17 @@ export class Dashboard {
     this.selectNavigation('rail-forward');
     this.globe?.setActive(false);
     this.forwarding.show();
+  }
+
+  showKeychain(): void {
+    if (!this.actions.files.confirmLeave()) return;
+    this.actions.files.hide(); this.actions.snippets.hide(); this.forwarding.hide();
+    this.isHome = false; this.root.hidden = false;
+    this.get('.home-content').hidden = true;
+    document.getElementById('app')!.hidden = true;
+    document.body.dataset.view = 'keychain'; this.selectNavigation('rail-keychain');
+    this.get('#rail-keychain').scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    this.globe?.setActive(false); this.actions.keychain.show();
   }
 
   private selectNavigation(id: string): void {
@@ -301,13 +341,14 @@ export class Dashboard {
   private signedOut(): void {
     this.actions.leaveWorkspace();
     this.actions.snippets.clear();
+    this.actions.keychain.clear();
     this.authenticated = false;
     this.get('#account-label').textContent = '未登录';
     const action = this.get<HTMLAnchorElement>('#account-action');
     action.href = '/auth/login'; action.textContent = '登录'; action.title = '管理员登录';
     this.setHosts([]);
     this.get('#host-list').textContent = '请点击右上角「登录」验证管理员身份。';
-    this.root.querySelectorAll<HTMLButtonElement>('[data-add], #quick-connect, #bottom-quick, #rail-snippets').forEach((button) => { button.disabled = true; });
+    this.root.querySelectorAll<HTMLButtonElement>('[data-add], #quick-connect, #bottom-quick, #rail-snippets, #rail-keychain').forEach((button) => { button.disabled = true; });
     this.show();
   }
 
@@ -414,10 +455,13 @@ export class Dashboard {
     if (this.busy) return;
     this.returnFocus = document.activeElement as HTMLElement;
     this.editing = host; this.form.reset();
+    (this.field('privateKeyFile') as HTMLInputElement).setCustomValidity('');
     this.get('#host-dialog-title').textContent = host ? '编辑主机' : '添加主机';
     for (const name of ['name', 'group', 'host', 'port', 'username', 'authMethod', 'fingerprint', 'initialCommand', 'termType', 'encoding'] as const) {
       if (host) this.field(name).value = String(host[name]);
     }
+    if (host?.keychainId) this.field('authMethod').value = 'keychain';
+    fillKeychainSelect(this.field('keychainId') as HTMLSelectElement, this.actions.keychain.keys, host?.keychainId ?? '');
     this.root.querySelectorAll('.credential-help').forEach((node) => { node.textContent = host ? '留空保留已保存的凭据；切换认证方式时需填写新凭据。' : '凭据仅由 Worker 加密后存入 D1。'; });
     const groups = this.get('#host-groups'); groups.replaceChildren();
     for (const group of new Set(this.hosts.map((item) => item.group))) {
@@ -429,9 +473,14 @@ export class Dashboard {
 
   private closeEditor(): void { if (!this.busy) this.dialog.close(); }
   private updateCredentialFields(): void {
-    const key = this.field('authMethod').value === 'publickey';
-    this.get('#cloud-password-field').hidden = key;
-    this.get('#cloud-key-field').hidden = !key;
+    const method = this.field('authMethod').value;
+    this.get('#cloud-password-field').hidden = method !== 'password';
+    this.get('#cloud-key-field').hidden = method !== 'publickey';
+    this.get('#cloud-key-file-field').hidden = method !== 'publickey';
+    this.field('privateKeyFile').disabled = method !== 'publickey';
+    this.get('#cloud-keychain-field').hidden = method !== 'keychain';
+    this.field('keychainId').required = method === 'keychain';
+    if (method === 'keychain') void this.actions.keychain.load();
   }
 
   private async save(): Promise<void> {
@@ -441,11 +490,14 @@ export class Dashboard {
     const value = (name: string) => this.field(name).value;
     const input: HostInput = {
       name: value('name'), group: value('group'), host: value('host').trim(), port: Number(value('port')),
-      username: value('username').trim(), authMethod: value('authMethod') as HostInput['authMethod'],
+      username: value('username').trim(), authMethod: value('authMethod') === 'password' ? 'password' : 'publickey',
       fingerprint: value('fingerprint').trim(), initialCommand: value('initialCommand'), termType: value('termType'), encoding: value('encoding'),
     };
-    const credential = input.authMethod === 'password' ? 'password' : 'privateKey';
-    if (value(credential) || !this.editing || this.editing.authMethod !== input.authMethod) input[credential] = value(credential);
+    if (value('authMethod') === 'keychain') input.keychainId = value('keychainId');
+    else {
+      const credential = input.authMethod === 'password' ? 'password' : 'privateKey';
+      if (value(credential) || !this.editing || this.editing.authMethod !== input.authMethod || this.editing.keychainId) input[credential] = value(credential);
+    }
     try {
       await saveHost(input, this.editing?.id);
       this.dialog.close(); await this.refresh();

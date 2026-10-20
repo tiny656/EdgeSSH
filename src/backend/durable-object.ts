@@ -2,7 +2,9 @@ import { connect } from 'cloudflare:sockets';
 import { parseConnectMessage, type Env } from '../types';
 import { assertPublicTarget, toSocketHostname } from './security';
 import { createTicket, verifyTicket } from './security';
-import { SSHSession } from './session';
+import { SSHSession, SSHAuthDefectError } from './session';
+import { readKeychainKey } from '../accounts/keychain';
+import { APIError } from '../accounts/http';
 import { ForwardingState } from '../forwarding/state';
 import { FORWARD_RETENTION_MS, previewError } from '../forwarding/security';
 
@@ -193,6 +195,16 @@ export class SSHSessionDO implements DurableObject {
       ws.serializeAttachment({ role: 'main', phase: 'connecting' } satisfies MainAttachment);
       this.clearDeadline(ws);
       if (config.port === 25) throw new Error('Cloudflare Workers cannot connect to outbound TCP port 25');
+      if (config.keychainId) {
+        const accountId = await this.state.storage.get<string>('account-id');
+        // 使用票据绑定的工作区取密钥，浏览器只发送引用，不能指定其他账户。
+        try { config.privateKey = (await readKeychainKey(this.env, accountId!, config.keychainId)).privateKey; }
+        catch (error) {
+          if (error instanceof APIError && error.status === 404) throw new SSHAuthDefectError('密钥不存在，请重新选择密钥链。');
+          throw new Error('密钥链读取失败，请稍后重试。');
+        }
+        this.assertConnectionActive(ws, pending);
+      }
       const verifiedAddresses = await assertPublicTarget(config.host);
       this.assertConnectionActive(ws, pending);
       ws.send(JSON.stringify({
@@ -225,7 +237,7 @@ export class SSHSessionDO implements DurableObject {
       ws.serializeAttachment({ role: 'main', phase: 'connected' } satisfies MainAttachment);
       await ssh.start();
     } catch (error) {
-      this.reject(ws, error instanceof Error ? error.message : String(error));
+      this.reject(ws, error instanceof Error ? error.message : String(error), !(error instanceof SSHAuthDefectError));
     }
   }
 
@@ -437,10 +449,10 @@ export class SSHSessionDO implements DurableObject {
     throw lastError;
   }
 
-  private reject(ws: WebSocket, message: string): void {
-    try { ws.send(JSON.stringify({ type: 'error', event: 'connection_failed', message })); } catch { /* already closed */ }
+  private reject(ws: WebSocket, message: string, retryable = true): void {
+    try { ws.send(JSON.stringify({ type: 'error', event: 'connection_failed', message, ...(retryable ? {} : { retryable: false }) })); } catch { /* already closed */ }
     this.cleanup(ws);
-    try { ws.close(1011, 'SSH connection failed'); } catch { /* already closed */ }
+    try { ws.close(retryable ? 1011 : 4001, 'SSH connection failed'); } catch { /* already closed */ }
   }
 
   private clearDeadline(ws: WebSocket): void {

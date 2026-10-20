@@ -7,6 +7,7 @@ import { listHosts, hostCredentials, saveHost, removeHost, updateHostSystem, typ
 import { Dashboard } from './dashboard';
 import { FilePage } from './file-page';
 import { Snippets } from './snippets';
+import { Keychain, fillKeychainSelect } from './keychain';
 import { resolveConnectionControl, resolveConnectionPanel } from './ui-state';
 import { classifyHostKey, SSH_FINGERPRINT_RE, type HostKeyPrompt } from './host-key';
 import { FileManager, collectFileManagerElements } from './file-manager';
@@ -53,6 +54,7 @@ interface ConnectionConfig {
   password?: string;
   authMethod: AuthMethod;
   privateKey?: string;
+  keychainId?: string;
   cols: number;
   rows: number;
   term: string;
@@ -262,6 +264,8 @@ const ui = {
   passwordField: element<HTMLElement>('password-field'),
   revealPassword: element<HTMLButtonElement>('reveal-password'),
   keyField: element<HTMLElement>('key-field'),
+  keychainField: element<HTMLElement>('keychain-field'),
+  keychainId: element<HTMLSelectElement>('keychain-id'),
   privateKey: element<HTMLTextAreaElement>('private-key'),
   keyFile: element<HTMLInputElement>('key-file'),
   keyFileName: element<HTMLElement>('key-file-name'),
@@ -379,6 +383,7 @@ function applyLanguage(language: Language, persist = false): void {
 
 let profiles: SavedProfile[] = [];
 let dashboard: Dashboard | undefined;
+let keychain: Keychain;
 let filePage: FilePage | undefined;
 let hostKeys: Record<string, string> = {};
 let socket: WebSocket | null = null;
@@ -418,7 +423,7 @@ let terminalTools: TerminalToolsController | undefined;
 let sshReconnectManager: WebSocketReconnectManager | null = null;
 let reconnectParams: {
   host: string; port: number; username: string; authMethod: string;
-  password?: string; privateKey?: string; pinnedKey?: string;
+  password?: string; privateKey?: string; keychainId?: string; pinnedKey?: string;
   term: string; encoding: string;
 } | null = null;
 
@@ -760,14 +765,18 @@ async function replaceRememberedHostKey(target: string, fingerprint: string): Pr
 
 function authMethod(): AuthMethod {
   const checked = ui.form.querySelector<HTMLInputElement>('input[name="authMethod"]:checked');
-  return checked?.value === 'publickey' ? 'publickey' : 'password';
+  return checked?.value === 'password' ? 'password' : 'publickey';
 }
 
-function setAuthMethod(method: AuthMethod): void {
+function usesKeychain(): boolean { return ui.form.querySelector<HTMLInputElement>('input[name="authMethod"]:checked')?.value === 'keychain'; }
+
+function setAuthMethod(method: AuthMethod | 'keychain'): void {
   const radio = ui.form.querySelector<HTMLInputElement>(`input[name="authMethod"][value="${method}"]`);
   if (radio) radio.checked = true;
   ui.passwordField.hidden = method !== 'password';
   ui.keyField.hidden = method !== 'publickey';
+  ui.keychainField.hidden = method !== 'keychain';
+  ui.keychainId.required = method === 'keychain';
 }
 
 function cancelHistoryPasswordLoad(): void {
@@ -794,6 +803,7 @@ function clearPrivateKeyFields(): void {
 function clearCredentials(): void {
   resetPasswordField();
   clearPrivateKeyFields();
+  ui.keychainId.value = '';
 }
 
 // A stale async history-password decrypt must never overwrite the form. The
@@ -848,6 +858,7 @@ function readProfileFromForm(password: string): Promise<SavedProfile> {
     updatedAt: Date.now(),
   };
   if (profile.authMethod === 'password') profile.password = password;
+  else if (usesKeychain()) profile.keychainId = ui.keychainId.value;
   else profile.privateKey = ui.privateKey.value;
   return Promise.resolve(profile);
 }
@@ -868,7 +879,9 @@ function validateProfileFields(): string | null {
 function validateConnection(): string | null {
   const profileError = validateProfileFields();
   if (profileError) return profileError;
-  if (authMethod() === 'publickey') {
+  if (usesKeychain()) {
+    if (!ui.keychainId.value) return bilingual('请选择密钥链中的密钥。', 'Select a saved key.');
+  } else if (authMethod() === 'publickey') {
     const key = ui.privateKey.value.trim();
     if (!key) return bilingual('请粘贴或选择未加密的 OpenSSH 私钥。', 'Paste or choose an unencrypted OpenSSH private key.');
     if (new TextEncoder().encode(key).length > MAX_KEY_BYTES) return bilingual('私钥大于 64 KiB。', 'The private key is larger than 64 KiB.');
@@ -899,7 +912,11 @@ async function applyProfile(profile: SavedProfile): Promise<void> {
   ui.termType.value = profile.termType;
   ui.encoding.value = profile.encoding;
   ui.fingerprint.value = profile.fingerprint || hostKeys[targetKey(profile.host, profile.port, profile.username)] || '';
-  setAuthMethod(profile.authMethod);
+  setAuthMethod(profile.keychainId ? 'keychain' : profile.authMethod);
+  if (profile.keychainId) {
+    fillKeychainSelect(ui.keychainId, keychain.keys, profile.keychainId);
+    void keychain.load();
+  }
   passwordDirty = false;
   historyPasswordLoading = true;
   setState(connectionState);
@@ -1600,6 +1617,7 @@ function createSshReconnectFactory(): (attempt: number) => Promise<WebSocket> {
         term: params.term,
       };
       if (params.authMethod === 'password') config.password = params.password;
+      else if (params.keychainId) config.keychainId = params.keychainId;
       else config.privateKey = params.privateKey;
       if (params.pinnedKey) config.expectedFingerprint = params.pinnedKey;
 
@@ -1711,6 +1729,7 @@ async function connect(): Promise<void> {
   try {
     const password = ui.password.value;
     const privateKey = ui.privateKey.value.trim();
+    const keychainId = usesKeychain() ? ui.keychainId.value : undefined;
     const method = authMethod();
     const term = ui.termType.value;
     const historyProfile = readProfileFromForm(password);
@@ -1735,6 +1754,7 @@ async function connect(): Promise<void> {
     // Persist connection parameters so the reconnect factory can reuse them.
     reconnectParams = { host, port, username, authMethod: method, term, encoding: ui.encoding.value };
     if (method === 'password') reconnectParams.password = password;
+    else if (keychainId) reconnectParams.keychainId = keychainId;
     else reconnectParams.privateKey = privateKey;
     if (pinnedKey) reconnectParams.pinnedKey = pinnedKey;
 
@@ -1765,6 +1785,7 @@ async function connect(): Promise<void> {
         term,
       };
       if (method === 'password') config.password = password;
+      else if (keychainId) config.keychainId = keychainId;
       else config.privateKey = privateKey;
       if (pinnedKey) config.expectedFingerprint = pinnedKey;
       activeSocket.send(JSON.stringify(config));
@@ -2009,7 +2030,7 @@ function initializeCompatibilityAPI(): void {
 for (const radio of ui.form.querySelectorAll<HTMLInputElement>('input[name="authMethod"]')) {
   radio.addEventListener('change', () => {
     cancelHistoryPasswordLoad();
-    setAuthMethod(authMethod());
+    setAuthMethod(radio.value as AuthMethod | 'keychain');
   });
 }
 ui.form.addEventListener('submit', (formEvent) => {
@@ -2197,7 +2218,12 @@ async function initialize(): Promise<void> {
       if (connectionState === 'idle' || connectionState === 'error') setPanelOpen(true);
     },
   }, fileManager);
+  keychain = new Keychain(() => dashboard?.openWorkspace());
+  keychain.addEventListener('change', () => fillKeychainSelect(ui.keychainId, keychain.keys));
+  ui.form.querySelector('input[name="authMethod"][value="keychain"]')!.addEventListener('change', () => void keychain.load());
+  element('manage-keychain').addEventListener('click', () => dashboard?.showKeychain());
   dashboard = new Dashboard({
+    keychain,
     files: filePage,
     snippets: new Snippets(ui.terminalCard, (snippet) => {
       // 片段只进入草稿，尤其多行命令不能通过粘贴意外立即执行。

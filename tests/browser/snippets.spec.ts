@@ -93,6 +93,69 @@ test('终端浮窗折叠、拖动与键盘复位；填入草稿而不执行，�
   await page.screenshot({ path: testInfo.outputPath('snippet-terminal.png'), fullPage: true });
 });
 
+test('浮窗片段使用两行紧凑布局、可访问图标和完整命令，触屏按钮可点击', async ({ page }, testInfo) => {
+  await fixture(page);
+  const longName = '部署前检查磁盘空间与服务状态 deployment preflight check';
+  const longCommand = `echo ${'deployment-check-'.repeat(30)}\nprintf 'first\\nsecond\\n'\npwd`;
+  await page.route('**/api/snippets', (route) => route.fulfill({ json: { snippets: [
+    { ...DEFAULT_SNIPPETS[0], id: 'compact-short', name: '磁盘空间', command: 'df -h', updatedAt: Date.now() },
+    { ...DEFAULT_SNIPPETS[0], id: 'compact-long', name: longName, command: longCommand, updatedAt: Date.now() },
+  ] } }));
+  await connectFiles(page);
+  await page.locator('#files-terminal').click();
+  const panel = page.locator('#snippet-panel');
+  if (await panel.getByRole('button', { name: '展开代码片段' }).count()) await panel.getByRole('button', { name: '展开代码片段' }).click();
+  const cards = panel.locator('.snippet-card');
+  await expect(cards).toHaveCount(2);
+  const buttons = cards.first().locator('.snippet-actions button');
+  await expect(buttons).toHaveCount(4);
+  for (const button of await buttons.all()) {
+    await expect(button).toHaveText('');
+    await expect(button).toHaveAttribute('title', /\S/);
+    await expect(button).toHaveAttribute('aria-label', /\S/);
+    await expect(button.locator('svg[aria-hidden="true"]')).toHaveCount(1);
+    const box = (await button.boundingBox())!;
+    expect(box.width).toBeGreaterThanOrEqual(testInfo.project.name === 'mobile' ? 44 : 28);
+    expect(box.height).toBeGreaterThanOrEqual(testInfo.project.name === 'mobile' ? 44 : 28);
+  }
+  // 检查实际几何位置，防止按钮重新挤成独立一行或长命令撑宽浮窗。
+  for (const card of await cards.all()) {
+    const layout = await card.evaluate((element) => {
+      const name = element.querySelector('h3')!.getBoundingClientRect();
+      const actions = element.querySelector('.snippet-actions')!.getBoundingClientRect();
+      const command = element.querySelector('pre')!.getBoundingClientRect();
+      const row = element.getBoundingClientRect();
+      return {
+        nameCenter: name.y + name.height / 2, actionsCenter: actions.y + actions.height / 2,
+        commandTop: command.top, headerBottom: Math.max(name.bottom, actions.bottom),
+        commandWidth: command.width, rowWidth: row.width,
+        overflow: element.scrollWidth > element.clientWidth,
+      };
+    });
+    expect(Math.abs(layout.nameCenter - layout.actionsCenter)).toBeLessThanOrEqual(1);
+    expect(layout.commandTop).toBeGreaterThanOrEqual(layout.headerBottom);
+    expect(layout.commandWidth).toBeLessThan(layout.rowWidth);
+    expect(layout.overflow).toBe(false);
+  }
+  expect((await cards.first().boundingBox())!.height).toBeLessThanOrEqual(testInfo.project.name === 'mobile' ? 84 : 68);
+  await expect(cards.last().locator('h3')).toHaveAttribute('title', longName);
+  await expect(cards.last().locator('pre')).toHaveText(longCommand);
+  await expect(cards.last().locator('pre')).toHaveAttribute('title', longCommand);
+  const use = cards.first().getByRole('button', { name: '使用 磁盘空间', exact: true });
+  await use.focus();
+  await expect(use).toBeFocused();
+  await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+    writeText: async (value: string) => { document.body.dataset.copiedCommand = value; },
+  } }));
+  await cards.last().getByRole('button', { name: `复制 ${longName}`, exact: true }).click();
+  await expect(panel.getByRole('status')).toHaveText('命令已复制。');
+  await expect(page.locator('body')).toHaveAttribute('data-copied-command', longCommand);
+  expect(await panel.locator('#snippet-panel-body').evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await panel.screenshot({ path: testInfo.outputPath('snippet-compact-dark.png') });
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+  await panel.screenshot({ path: testInfo.outputPath('snippet-compact-light.png') });
+});
+
 test('加载与保存错误可重试，不丢失草稿；空列表不补回默认命令', async ({ page }) => {
   await fixture(page);
   await page.route('**/api/snippets', (route) => route.fulfill({ status: 500, json: { error: '片段服务暂时不可用' } }));

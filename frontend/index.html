@@ -134,7 +134,8 @@
                 data-i18n-aria-label-en="Authentication method"
               >
                 <label><input type="radio" name="authMethod" value="password" checked /><span data-i18n-zh="密码" data-i18n-en="Password">密码</span></label>
-                <label><input type="radio" name="authMethod" value="publickey" /><span data-i18n-zh="SSH 密钥" data-i18n-en="SSH key">SSH 密钥</span></label>
+                <label><input type="radio" name="authMethod" value="publickey" /><span data-i18n-zh="上传私钥" data-i18n-en="Private key">上传私钥</span></label>
+                <label><input type="radio" name="authMethod" value="keychain" /><span data-i18n-zh="密钥链" data-i18n-en="Keychain">密钥链</span></label>
               </div>
 
               <div id="password-field" class="field secret-field">
@@ -159,6 +160,11 @@
                 </span>
               </div>
 
+              <div id="keychain-field" class="field" hidden>
+                <label for="keychain-id" data-i18n-zh="已有密钥" data-i18n-en="Saved key">已有密钥</label>
+                <select id="keychain-id"><option value="">选择密钥</option></select>
+                <button id="manage-keychain" class="secondary-button" type="button" data-i18n-zh="管理密钥链" data-i18n-en="Manage keychain">管理密钥链</button>
+              </div>
               <div id="key-field" class="key-field" hidden>
                 <label class="field">
                   <span>

@@ -20,6 +20,7 @@ export interface CloudHost {
   port: number;
   username: string;
   authMethod: 'password' | 'publickey';
+  keychainId?: string;
   initialCommand: string;
   termType: string;
   encoding: string;
@@ -30,7 +31,7 @@ export interface CloudHost {
   updatedAt: number;
 }
 
-export interface Credentials { password?: string; privateKey?: string }
+export interface Credentials { password?: string; privateKey?: string; keychainId?: string }
 export type HostInput = Omit<CloudHost, 'id' | 'location' | 'system' | 'hasCredential' | 'updatedAt'> & Credentials;
 
 export class APIError extends Error {
@@ -67,3 +68,12 @@ export const updateHostSystem = async (id: string, system: HostSystemInfo): Prom
 export const saveHost = async (input: HostInput, id?: string): Promise<CloudHost> =>
   (await api<{ host: CloudHost }>(id ? `/api/hosts/${id}` : '/api/hosts', id ? 'PUT' : 'POST', input)).host;
 export const removeHost = (id: string): Promise<{ ok: boolean }> => api(`/api/hosts/${id}`, 'DELETE');
+
+export interface KeychainKey { id: string; name: string; publicKey: string; fingerprint: string; updatedAt: number }
+export interface KeychainInput { name: string; privateKey?: string; publicKey?: string; generate?: boolean }
+export const listKeychain = async (): Promise<KeychainKey[]> => (await api<{ keys: KeychainKey[] }>('/api/keychain')).keys;
+export const saveKeychainKey = async (input: KeychainInput, id?: string): Promise<KeychainKey> =>
+  (await api<{ key: KeychainKey }>(id ? `/api/keychain/${id}` : '/api/keychain', id ? 'PUT' : 'POST', input)).key;
+export const removeKeychainKey = (id: string): Promise<{ ok: boolean }> => api(`/api/keychain/${id}`, 'DELETE');
+export const exportKeychainKey = (id: string): Promise<{ privateKey: string }> => api(`/api/keychain/${id}/private-key`, 'POST');
+export const generateKeychainKey = (): Promise<{ privateKey: string; publicKey: string }> => api('/api/keychain/generate', 'POST', {});

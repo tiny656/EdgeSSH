@@ -33,6 +33,13 @@ interface ParsedKey {
 }
 
 export class SSHAuth {
+  static async publicKeyInfo(privateKey: string): Promise<{ publicKey: string; fingerprint: string }> {
+    const { keyType, publicKeyBlob } = await this.parsePrivateKey(privateKey);
+    const encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
+    const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', toBufferSource(publicKeyBlob)));
+    return { publicKey: `${keyType} ${encode(publicKeyBlob)}`, fingerprint: `SHA256:${encode(hash).replace(/=+$/, '')}` };
+  }
+
   static buildPasswordAuthRequest(
     username: string,
     password: string

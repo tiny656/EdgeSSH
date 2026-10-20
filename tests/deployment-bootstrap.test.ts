@@ -239,3 +239,11 @@ test('a previously migrated but empty hosts table permits first key generation',
   assert.ok((await prepareEncryptionSecret(api, settings, database, new Set())).ENCRYPTION_KEY);
   assert.equal(queries, 2);
 });
+
+test('keychain-only ciphertext also prevents replacement encryption keys', async () => {
+  const api = new CloudflareApi('token', async (_url, init) => {
+    const { sql } = JSON.parse(String(init?.body));
+    return json([{ success: true, results: sql.includes('sqlite_master') ? [{ name: 'keychain' }] : [{ value: 1 }] }]);
+  });
+  await assert.rejects(prepareEncryptionSecret(api, settings, database, new Set()), /恢复原密钥/);
+});

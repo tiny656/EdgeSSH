@@ -62,12 +62,16 @@ body[data-view='snippets'] { overflow-y: auto; background: var(--home-bg); }
 .snippet-panel-hint { color: var(--snip-muted); font-size: 11px; margin: 12px 0; }
 .compact .snippet-search { flex-basis: 100%; }
 .compact .snippet-toolbar > button[data-new] { flex: 1; }
-.compact .snippet-list { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-.compact .snippet-card { padding: 12px; border-radius: 8px; }
-.compact .snippet-card pre { padding: 8px; margin-bottom: 10px; max-height: 90px; }
-.compact .snippet-card h3 { font-size: 12px; margin-bottom: 8px; }
-.compact .snippet-actions { gap: 4px; }
-.compact .snippet-actions button { padding: 6px; font-size: 11px; }
+.compact .snippet-list { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+/* 名称和操作共享首行，命令独占第二行；长命令仍可换行、滚动和选中复制。 */
+.compact .snippet-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; padding: 8px 10px; border-radius: 8px; }
+.compact .snippet-card h3 { min-width: 0; font-size: 12px; line-height: 1.5; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compact .snippet-card pre { grid-column: 1 / -1; padding: 0; margin: 0; max-height: 64px; border-radius: 0; background: transparent; line-height: 1.5; scrollbar-width: thin; }
+.compact .snippet-actions { flex-wrap: nowrap; gap: 2px; }
+.compact .snippet-actions button { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 28px; min-height: 28px; padding: 0; border-color: transparent; border-radius: 6px; background: transparent; }
+.compact .snippet-actions button.snippet-use { background: var(--snip-accent-soft); }
+.compact .snippet-actions button:active:not(:disabled) { background: var(--snip-accent-soft); }
+.compact .snippet-actions svg { width: 15px; height: 15px; pointer-events: none; }
 .snippet-dialog { width: min(540px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 24px; border: 1px solid var(--snip-border); border-radius: 16px; box-shadow: var(--shadow); }
 .snippet-dialog::backdrop { background: #080b10a6; }
 .snippet-dialog header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
@@ -91,5 +95,10 @@ body[data-view='snippets'] { overflow-y: auto; background: var(--home-bg); }
 @media (max-width: 600px) {
   #dashboard .home-rail { overflow-x: auto; }
   #dashboard .rail-item { flex-shrink: 0; }
+}
+/* 触屏保留足够的点击区域，图标本身仍小巧，且不增加独立操作行。 */
+@media (pointer: coarse) {
+  .compact .snippet-actions { gap: 8px; }
+  .compact .snippet-actions button { width: 44px; min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) { .snippet-surface button { transition: none; } }

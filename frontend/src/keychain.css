@@ -1,0 +1,37 @@
+body[data-view='keychain'] { overflow-y: auto; background: var(--home-bg); }
+body[data-view='keychain'] #dashboard :is(.home-search, .header-add) { display: none; }
+body[data-view='keychain'] .home-account { margin-left: auto; }
+.keychain-page { min-width: 0; width: 100%; max-width: 1200px; margin-inline: auto; padding: 32px; }
+.keychain-heading, .keychain-toolbar { display: flex; align-items: center; gap: 12px; justify-content: space-between; margin-bottom: 24px; }
+.keychain-heading h1 { margin: 0; font-size: 26px; letter-spacing: 0; }
+.keychain-heading .home-button { gap: 8px; }
+.keychain-heading-actions { display: flex; gap: 8px; align-items: center; }
+#dashboard .keychain-heading [data-terminal] { width: 44px; height: 44px; padding: 10px; }
+.keychain-toolbar input { max-width: 440px; flex: 1; min-width: 0; }
+#dashboard .keychain-toolbar input, #dashboard .keychain-copy textarea { padding: 10px 12px; border: 1px solid var(--home-line); border-radius: 6px; color: var(--home-ink); background: var(--home-surface); box-shadow: none; }
+#dashboard .keychain-toolbar input { min-height: 44px; font: inherit; }
+.keychain-status { color: var(--home-muted); overflow-wrap: anywhere; }
+.keychain-list { border-top: 1px solid var(--home-line); }
+.keychain-row { display: flex; gap: 18px; padding: 24px 0; border-bottom: 1px solid var(--home-line); align-items: flex-start; }
+.keychain-row > svg { margin-top: 4px; color: var(--home-success); }
+.keychain-copy { display: grid; gap: 8px; min-width: 0; flex: 1; }
+.keychain-copy strong { font-size: 16px; overflow-wrap: anywhere; }
+.keychain-copy small { color: var(--home-muted); }
+.keychain-copy code { font: 12px/1.5 var(--home-mono); overflow-wrap: anywhere; }
+#dashboard .keychain-copy textarea { width: 100%; resize: vertical; min-height: 72px; font: 12px/1.5 var(--home-mono); }
+.keychain-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+#dashboard .keychain-actions .home-button, #dashboard .keychain-toolbar .home-button { min-width: 44px; min-height: 44px; padding: 10px; }
+.keychain-dialog { width: min(620px, calc(100vw - 24px)); }
+#dashboard .keychain-dialog { border-radius: 8px; }
+.keychain-dialog form { min-width: 0; }
+.keychain-dialog h2 { margin: 0; font-size: 22px; }
+.keychain-dialog .credential-help { color: var(--home-muted); font-size: 12px; }
+.keychain-dialog textarea { font-family: var(--home-mono); }
+.keychain-key-actions { display: flex; justify-content: flex-end; }
+.keychain-key-actions .home-button { gap: 8px; min-width: 100px; }
+@media (max-width: 700px) {
+  .keychain-page { padding: 24px 16px; }
+  .keychain-row { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 12px; }
+  .keychain-actions { grid-column: 2; }
+  #dashboard .keychain-toolbar input { font-size: 16px; }
+}

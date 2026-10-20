@@ -1,3 +1,4 @@
+import { createElement, SquareTerminal, Copy, Pencil, Trash2 } from 'lucide';
 import { SnippetStore, type Snippet } from './snippet-store';
 import { SnippetEditor } from './snippet-editor';
 
@@ -5,6 +6,13 @@ interface SnippetListOptions {
   compact?: boolean;
   use?(snippet: Snippet): void;
 }
+
+const ACTION_ICONS = {
+  use: SquareTerminal,
+  copy: Copy,
+  edit: Pencil,
+  delete: Trash2,
+};
 
 export class SnippetList {
   readonly root = document.createElement('div');
@@ -29,9 +37,15 @@ export class SnippetList {
     this.render();
   }
 
-  private action(label: string, title: string, callback: (button: HTMLButtonElement) => void): HTMLButtonElement {
+  private action(label: string, title: string, callback: (button: HTMLButtonElement) => void, icon: keyof typeof ACTION_ICONS): HTMLButtonElement {
     const button = document.createElement('button'); button.type = 'button';
-    button.textContent = label; button.title = title; button.setAttribute('aria-label', title);
+    // 浮窗省去文字以缩短列表；保留可访问名称和悬停提示，管理页仍显示文字按钮。
+    if (this.options.compact) {
+      button.append(createElement(ACTION_ICONS[icon], { 'aria-hidden': 'true', focusable: 'false', 'stroke-width': '1.7' }));
+    } else {
+      button.textContent = label;
+    }
+    button.title = icon === 'use' ? `${label} · ${title}` : title; button.setAttribute('aria-label', title);
     button.addEventListener('click', () => callback(button));
     return button;
   }
@@ -52,27 +66,29 @@ export class SnippetList {
     }
     for (const snippet of items) {
       const row = document.createElement('article'); row.className = 'snippet-card';
-      const name = document.createElement('h3'); name.textContent = snippet.name;
+      const name = document.createElement('h3'); name.textContent = snippet.name; name.title = snippet.name;
       const command = document.createElement('pre'); command.textContent = snippet.command;
       command.title = snippet.command;
       const actions = document.createElement('div'); actions.className = 'snippet-actions';
       if (this.options.use) {
-        const use = this.action('填入编辑器', `使用 ${snippet.name}`, () => this.options.use!(snippet));
+        const use = this.action('填入编辑器', `使用 ${snippet.name}`, () => this.options.use!(snippet), 'use');
         use.className = 'snippet-use'; actions.append(use);
       }
       actions.append(this.action('复制', `复制 ${snippet.name}`, async () => {
         try { await navigator.clipboard.writeText(snippet.command); this.status.textContent = '命令已复制。'; }
         catch { this.status.textContent = '无法访问剪贴板，请选中命令手动复制。'; }
-      }));
-      actions.append(this.action('编辑', `编辑 ${snippet.name}`, () => this.editor.open(snippet)));
+      }, 'copy'));
+      actions.append(this.action('编辑', `编辑 ${snippet.name}`, () => this.editor.open(snippet), 'edit'));
       const remove = this.action('删除', `删除 ${snippet.name}`, async (button) => {
         if (!confirm(`删除片段「${snippet.name}」？删除后不会自动恢复。`)) return;
         button.disabled = true;
         try { await this.store.remove(snippet.id); }
         catch (error) { this.status.textContent = error instanceof Error ? error.message : '删除失败，请重试。'; button.disabled = false; }
-      });
+      }, 'delete');
       remove.className = 'snippet-delete'; actions.append(remove);
-      row.append(name, command, actions); this.list.append(row);
+      // 浮窗将操作并入名称行，给下一行命令保留完整宽度，不再额外占一行按钮。
+      row.append(...(this.options.compact ? [name, actions, command] : [name, command, actions]));
+      this.list.append(row);
     }
   }
 }

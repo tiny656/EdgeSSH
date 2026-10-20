@@ -12,7 +12,7 @@ const trustedURL = `http://127.0.0.1:5173/_forward/${sessionId}/`;
 const rule = { id: 'rule-trusted', name: '开发服务', hostId: 'alpha', port: 8080, mode: 'trusted', updatedAt: Date.now() };
 const isolatedRule = { ...rule, id: 'rule-isolated', name: '隔离服务', mode: 'isolated' };
 
-async function forwardingFixture(page: Page, previewAvailable = true, noHosts = false) {
+async function forwardingFixture(page: Page, previewAvailable = true, noHosts = false, keychainId?: string) {
   const calls: Array<Record<string, unknown>> = [];
   const sockets: WebSocketRoute[] = [];
   const closed: boolean[] = [];
@@ -23,7 +23,7 @@ async function forwardingFixture(page: Page, previewAvailable = true, noHosts = 
     const requestURL = new URL(route.request().url());
     const path = requestURL.pathname;
     if (path === '/api/auth/me') return route.fulfill({ json: { account: { username: 'Administrator' }, provider: 'cloudflare' } });
-    if (path === '/api/hosts') return route.fulfill({ json: { hosts: noHosts ? [] : [host] } });
+    if (path === '/api/hosts') return route.fulfill({ json: { hosts: noHosts ? [] : [{ ...host, ...(keychainId ? { authMethod: 'publickey', keychainId } : {}) }] } });
     if (path === '/api/forward-rules' && route.request().method() === 'GET') return route.fulfill({ json: { rules } });
     if (path === '/api/forward-rules' && route.request().method() === 'POST') {
       const saved = { ...route.request().postDataJSON(), id: 'created-rule', updatedAt: Date.now() };
@@ -37,7 +37,7 @@ async function forwardingFixture(page: Page, previewAvailable = true, noHosts = 
       const saved = { ...route.request().postDataJSON(), id, updatedAt: Date.now() };
       rules = [saved, ...rules.filter((item) => item.id !== id)]; return route.fulfill({ json: { rule: saved } });
     }
-    if (path.endsWith('/credentials')) return route.fulfill({ json: { password: 'test-only-password' } });
+    if (path.endsWith('/credentials')) return route.fulfill({ json: keychainId ? { keychainId } : { password: 'test-only-password' } });
     if (path === '/api/session') return route.fulfill({ json: { ticket: 'test-ticket', sessionId } });
     if (path === '/api/forwarding' && route.request().method() === 'GET') {
       if (requestURL.searchParams.has('session')) {
@@ -80,6 +80,16 @@ async function startForward(page: Page) {
   await page.locator('.forward-page input[name="trusted"]').check();
   await page.locator('.forward-card button[type="submit"]').click();
 }
+
+test('端口转发复用主机的密钥链引用，不传输私钥', async ({ page }) => {
+  const keychainId = '00000000-0000-4000-8000-000000000099';
+  const { calls } = await forwardingFixture(page, true, false, keychainId);
+  await startForward(page);
+  await expect.poll(() => calls.some((call) => call.type === 'connect')).toBe(true);
+  expect(calls.find((call) => call.type === 'connect')).toMatchObject({ mode: 'forward', authMethod: 'publickey', keychainId });
+  expect(calls.find((call) => call.type === 'connect')).not.toHaveProperty('privateKey');
+  expect(calls.find((call) => call.type === 'connect')).not.toHaveProperty('password');
+});
 
 async function chooseForwardMode(page: Page, mode: 'trusted' | 'isolated') {
   await page.locator(`.forward-switch [data-mode="${mode}"]`).click();
