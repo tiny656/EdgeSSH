@@ -36,6 +36,7 @@ export class Keychain extends EventTarget {
           <div class="wide keychain-key-actions"><button type="button" class="home-button" data-generate title="生成 Ed25519 密钥">生成</button></div>
           <label class="wide">私钥<textarea name="privateKey" rows="6" maxlength="65536" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
           <label class="wide">私钥文件<input name="file" type="file" accept=".pem,.key,.openssh,text/plain"></label>
+          <label class="wide">私钥口令<input name="passphrase" type="password" maxlength="1024" autocomplete="off"><small class="credential-help">私钥若用口令加密，请在此填写口令；未加密则留空。</small></label>
           <label class="wide">公钥<textarea name="publicKey" rows="3" maxlength="16384" spellcheck="false" placeholder="ssh-ed25519 …"></textarea></label>
         </div>
         <p class="credential-help" data-key-help></p>
@@ -82,8 +83,20 @@ export class Keychain extends EventTarget {
   hide(): void { this.root.hidden = true; }
   clear(): void { this.generation++; this.keys = []; this.dialog.close(); this.form.reset(); this.render(); this.dispatchEvent(new Event('change')); }
 
-  private message(text: string): void {
-    const status = this.root.querySelector<HTMLElement>('.keychain-status')!; status.textContent = text; status.hidden = !text;
+  private message(text: string, nodes: Node[] = []): void {
+    const status = this.root.querySelector<HTMLElement>('.keychain-status')!;
+    status.replaceChildren(text, ...nodes); status.hidden = !text;
+  }
+
+  /** 导出加密私钥时把口令显示出来：缺了口令，下载的文件等同报废。 */
+  private revealPassphrase(passphrase: string): void {
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'home-button';
+    button.textContent = '复制口令';
+    button.addEventListener('click', () => {
+      void navigator.clipboard.writeText(passphrase);
+      button.textContent = '已复制';
+    });
+    this.message('私钥已下载。该私钥带有口令，口令为：', [document.createTextNode(passphrase), button]);
   }
 
   private render(): void {
@@ -103,13 +116,16 @@ export class Keychain extends EventTarget {
       const commands = [
         ['复制公钥', Copy, async () => { await navigator.clipboard.writeText(key.publicKey); this.message('公钥已复制。'); }],
         ['下载私钥', Download, async () => {
-          if (!confirm(`下载「${key.name}」的未加密私钥？请妥善保管下载的文件。`)) return;
+          if (!confirm(`下载「${key.name}」的私钥？若该私钥带口令，下载后会一并显示口令，请妥善保管。`)) return;
           const generation = this.generation;
-          const { privateKey } = await exportKeychainKey(key.id);
+          const { privateKey, passphrase } = await exportKeychainKey(key.id);
           if (generation !== this.generation) return;
           const url = URL.createObjectURL(new Blob([privateKey + '\n'], { type: 'application/octet-stream' }));
           const link = document.createElement('a'); link.href = url; link.download = `${key.name.replace(/[^a-zA-Z0-9_-]/g, '_') || 'edgessh'}.key`; link.click();
           setTimeout(() => URL.revokeObjectURL(url), 1000);
+          // 不给口令的话，导出的加密私钥用户根本用不了。
+          if (passphrase) this.revealPassphrase(passphrase);
+          else this.message('私钥已下载，请妥善保管下载的文件。');
         }],
         ['编辑密钥', Pencil, async () => this.open(key)],
         ['删除密钥', Trash2, async () => {
@@ -142,7 +158,7 @@ export class Keychain extends EventTarget {
     this.dialog.querySelector<HTMLElement>('[role="alert"]')!.hidden = true;
     this.dialog.querySelector('[data-key-help]')!.textContent = this.editing
       ? '私钥留空保留原值；更换私钥时请更新公钥或将公钥留空。'
-      : '未设口令的 OpenSSH 私钥 · 公钥留空时自动提取 · 私钥加密保存。';
+      : '支持未加密与带口令的 OpenSSH 私钥 · 公钥留空时自动提取 · 私钥加密保存。';
     this.dialog.showModal(); this.field('name').focus();
   }
 
@@ -154,17 +170,19 @@ export class Keychain extends EventTarget {
     const generation = this.generation, editorGeneration = this.editorGeneration;
     this.busy = true; button.disabled = true; submit.disabled = true;
     button.lastChild!.textContent = '生成中…';
-    for (const name of ['privateKey', 'publicKey', 'file']) this.field(name).disabled = true;
+    for (const name of ['privateKey', 'publicKey', 'file', 'passphrase']) this.field(name).disabled = true;
     this.dialog.querySelector<HTMLElement>('[role="alert"]')!.hidden = true;
     try {
       const pair = await generateKeychainKey();
       if (generation !== this.generation || editorGeneration !== this.editorGeneration) return;
       this.field('privateKey').value = pair.privateKey; this.field('publicKey').value = pair.publicKey;
       this.field('file').value = ''; this.field('file').setCustomValidity('');
+      // 生成的密钥没有口令，清掉可能残留的旧口令输入。
+      this.field('passphrase').value = '';
     } catch (error) { if (generation === this.generation && editorGeneration === this.editorGeneration) this.formError(error); }
     finally {
       this.busy = false; button.disabled = false; submit.disabled = false; button.lastChild!.textContent = '生成';
-      for (const name of ['privateKey', 'publicKey', 'file']) this.field(name).disabled = false;
+      for (const name of ['privateKey', 'publicKey', 'file', 'passphrase']) this.field(name).disabled = false;
     }
   }
 
@@ -193,8 +211,14 @@ export class Keychain extends EventTarget {
     const generation = this.generation;
     this.busy = true; button.disabled = true; button.textContent = '保存中…';
     try {
+      const privateKey = this.field('privateKey').value;
+      const passphrase = this.field('passphrase').value;
       await saveKeychainKey({ name: this.field('name').value,
-        privateKey: this.field('privateKey').value || undefined, publicKey: this.field('publicKey').value,
+        privateKey: privateKey || undefined, publicKey: this.field('publicKey').value,
+        // 口令留空的语义取决于有没有旧值可沿用：更换私钥时留空表示「新私钥未加密」，必须显式发出
+        // 空口令去清掉旧口令；不换私钥时留空表示沿用原口令，干脆不带这个字段。新建本就没有旧
+        // 口令，发出空字段只是噪声。
+        ...(passphrase || (privateKey && this.editing) ? { passphrase } : {}),
       }, this.editing?.id);
       if (generation !== this.generation) return;
       this.dialog.close(); await this.load();

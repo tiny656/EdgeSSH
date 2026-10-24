@@ -1,5 +1,7 @@
-import { SSH_MSG_USERAUTH_REQUEST } from '../types';
-import { encodeString, concat, readUint32, toBufferSource } from './utils';
+import { SSH_MSG_USERAUTH_REQUEST } from '../types.ts';
+import { encodeString, concat, readUint32, toBufferSource } from './utils.ts';
+import { bcryptPbkdf } from './bcrypt-pbkdf.ts';
+import { aes } from './aes.ts';
 import {
   buildKeyboardInteractiveAuthRequest,
   buildKeyboardInteractiveResponse,
@@ -9,7 +11,29 @@ import {
   passwordResponsesForChallenge,
   type KeyboardInteractiveChallenge,
   type PasswordPromptIdentity,
-} from './auth-password';
+} from './auth-password.ts';
+
+// OpenSSH 新格式私钥所用加密算法的密钥长度；IV 长度固定 16 字节。
+const PRIVATE_KEY_CIPHER_KEY_BYTES: Record<string, number> = {
+  'aes128-cbc': 16,
+  'aes192-cbc': 24,
+  'aes256-cbc': 32,
+  'aes128-ctr': 16,
+  'aes192-ctr': 24,
+  'aes256-ctr': 32,
+};
+
+// 私钥段末尾填充块的对齐单位：加密时按所用密码的块大小，未加密时固定为 8 字节。
+// 这里必须与密钥长度表同步维护——两者取自同一批 OpenSSH 支持的算法。
+const PRIVATE_KEY_CIPHER_BLOCK_BYTES: Record<string, number> = {
+  'aes128-cbc': 16,
+  'aes192-cbc': 16,
+  'aes256-cbc': 16,
+  'aes128-ctr': 16,
+  'aes192-ctr': 16,
+  'aes256-ctr': 16,
+};
+const UNENCRYPTED_PRIVATE_KEY_BLOCK_BYTES = 8;
 
 // SSH key type constants
 const SSH_ED25519 = 'ssh-ed25519';
@@ -33,8 +57,8 @@ interface ParsedKey {
 }
 
 export class SSHAuth {
-  static async publicKeyInfo(privateKey: string): Promise<{ publicKey: string; fingerprint: string }> {
-    const { keyType, publicKeyBlob } = await this.parsePrivateKey(privateKey);
+  static async publicKeyInfo(privateKey: string, passphrase?: string): Promise<{ publicKey: string; fingerprint: string }> {
+    const { keyType, publicKeyBlob } = await this.parsePrivateKey(privateKey, passphrase);
     const encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
     const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', toBufferSource(publicKeyBlob)));
     return { publicKey: `${keyType} ${encode(publicKeyBlob)}`, fingerprint: `SHA256:${encode(hash).replace(/=+$/, '')}` };
@@ -77,8 +101,9 @@ export class SSHAuth {
     privateKeyPEM: string,
     sessionID: Uint8Array,
     serverSigAlgs?: string[],
+    passphrase?: string,
   ): Promise<Uint8Array> {
-    const { signingKey, publicKeyBlob, keyType, rsaPkcs8 } = await this.parsePrivateKey(privateKeyPEM);
+    const { signingKey, publicKeyBlob, keyType, rsaPkcs8 } = await this.parsePrivateKey(privateKeyPEM, passphrase);
 
     let requestAlgo = keyType;
     let signatureAlgo = keyType;
@@ -199,10 +224,12 @@ export class SSHAuth {
   /**
    * Parse an OpenSSH private key and detect its type.
    */
-  private static async parsePrivateKey(pem: string): Promise<ParsedKey> {
-    const match = /^-----BEGIN OPENSSH PRIVATE KEY-----\r?\n([A-Za-z0-9+/=\r\n]+)\r?\n-----END OPENSSH PRIVATE KEY-----$/.exec(pem.trim());
+  private static async parsePrivateKey(pem: string, passphrase?: string): Promise<ParsedKey> {
+    // 兼容真实场景：部分工具导出的密钥行尾会有空格/制表符，这里容忍任意空白，
+    // 并在下一步统一剔除，只对 base64 本体做严格解码。
+    const match = /^-----BEGIN OPENSSH PRIVATE KEY-----\r?\n([A-Za-z0-9+/=\s]+)\r?\n-----END OPENSSH PRIVATE KEY-----$/.exec(pem.trim());
     if (!match) throw new Error('Unsupported private key format; only OpenSSH keys are accepted');
-    const b64 = match[1].replace(/\r?\n/g, '');
+    const b64 = match[1].replace(/\s+/g, '');
     if (b64.length === 0 || b64.length % 4 !== 0) throw new Error('Malformed OpenSSH private key Base64 data');
     let raw: Uint8Array;
     try {
@@ -232,7 +259,6 @@ export class SSHAuth {
     const cipherLen = readUint32(raw, offset); offset += 4;
     if (offset + cipherLen > raw.length) throw new Error('Malformed private key cipher field');
     const cipher = this.decodeText(raw.slice(offset, offset + cipherLen), 'private key cipher'); offset += cipherLen;
-    if (cipher !== 'none') throw new Error('Encrypted private keys are not supported; remove the passphrase with ssh-keygen -p');
 
     // kdfname
     if (offset + 4 > raw.length) throw new Error('Malformed private key KDF length');
@@ -240,18 +266,28 @@ export class SSHAuth {
     if (offset + kdfLen > raw.length) throw new Error('Malformed private key KDF field');
     const kdf = this.decodeText(raw.slice(offset, offset + kdfLen), 'private key KDF');
     offset += kdfLen;
-    if (kdf !== 'none') {
-      throw new Error('Malformed unencrypted private key: KDF must be none');
-    }
 
     // kdfoptions
     if (offset + 4 > raw.length) throw new Error('Malformed private key KDF options length');
     const kdfOptLen = readUint32(raw, offset); offset += 4;
     if (offset + kdfOptLen > raw.length) throw new Error('Malformed private key KDF options');
-    if (kdfOptLen !== 0) {
-      throw new Error('Malformed unencrypted private key: KDF options must be empty');
-    }
+    const kdfOptions = raw.slice(offset, offset + kdfOptLen);
     offset += kdfOptLen;
+
+    const encrypted = cipher !== 'none';
+    // 填充按「块」对齐：加密私钥用密码块大小（AES 为 16），未加密私钥为 8。
+    const blockSize = encrypted ? PRIVATE_KEY_CIPHER_BLOCK_BYTES[cipher] : UNENCRYPTED_PRIVATE_KEY_BLOCK_BYTES;
+    if (encrypted) {
+      if (!(cipher in PRIVATE_KEY_CIPHER_KEY_BYTES)) {
+        throw new Error(`Unsupported private key cipher "${cipher}"`);
+      }
+      if (kdf !== 'bcrypt') {
+        throw new Error(`Unsupported private key KDF "${kdf}"; only bcrypt is supported`);
+      }
+    } else {
+      if (kdf !== 'none') throw new Error('Malformed unencrypted private key: KDF must be none');
+      if (kdfOptLen !== 0) throw new Error('Malformed unencrypted private key: KDF options must be empty');
+    }
 
     // number of keys
     if (offset + 4 > raw.length) throw new Error('Malformed private key count');
@@ -265,7 +301,7 @@ export class SSHAuth {
     const publicKeyBlob = raw.slice(offset, offset + pubSecLen);
     offset += pubSecLen;
 
-    // private key section
+    // private key section（加密私钥时这一段是密文）
     if (offset + 4 > raw.length) throw new Error('Malformed private key section length');
     const privSecLen = readUint32(raw, offset); offset += 4;
     if (offset + privSecLen > raw.length) throw new Error('Malformed private key section');
@@ -273,31 +309,84 @@ export class SSHAuth {
     offset += privSecLen;
     if (offset !== raw.length) throw new Error('Trailing data after private key section');
 
+    // 加密私钥：先用 bcrypt 派生保护密钥，再解出明文私钥段。
+    const privateBytes = encrypted
+      ? await this.decryptOpenSSHPrivateSection(privSection, cipher, kdfOptions, passphrase)
+      : privSection;
+
     // Parse private section: checkint1, checkint2, keytype, ...
     let po = 0;
-    if (privSection.length < 8) throw new Error('Malformed private key check integers');
-    const checkint1 = readUint32(privSection, po); po += 4;
-    const checkint2 = readUint32(privSection, po); po += 4;
+    if (privateBytes.length < 8) throw new Error('Malformed private key check integers');
+    const checkint1 = readUint32(privateBytes, po); po += 4;
+    const checkint2 = readUint32(privateBytes, po); po += 4;
     if (checkint1 !== checkint2) {
-      throw new Error('Private key check integers do not match');
+      // 加密私钥解出来后 checkint 不相等，几乎总是口令不正确
+      throw new Error(encrypted
+        ? 'Incorrect private key passphrase'
+        : 'Private key check integers do not match');
     }
 
     // key type
-    if (po + 4 > privSection.length) throw new Error('Malformed private key type length');
-    const ktLen = readUint32(privSection, po); po += 4;
-    if (po + ktLen > privSection.length) throw new Error('Malformed private key type');
-    const keyType = this.decodeText(privSection.slice(po, po + ktLen), 'private key type'); po += ktLen;
+    if (po + 4 > privateBytes.length) throw new Error('Malformed private key type length');
+    const ktLen = readUint32(privateBytes, po); po += 4;
+    if (po + ktLen > privateBytes.length) throw new Error('Malformed private key type');
+    const keyType = this.decodeText(privateBytes.slice(po, po + ktLen), 'private key type'); po += ktLen;
 
     // Parse based on key type
     if (keyType === SSH_ED25519) {
-      return this.parseEd25519Key(privSection, po, publicKeyBlob);
+      return this.parseEd25519Key(privateBytes, po, publicKeyBlob, blockSize);
     } else if (keyType === SSH_RSA) {
-      return this.parseRSAKey(privSection, po, publicKeyBlob);
+      return this.parseRSAKey(privateBytes, po, publicKeyBlob, blockSize);
     } else if (keyType.startsWith('ecdsa-sha2-')) {
-      return this.parseECDSAKey(privSection, po, keyType, publicKeyBlob);
+      return this.parseECDSAKey(privateBytes, po, keyType, publicKeyBlob, blockSize);
     } else {
       throw new Error(`Unsupported key type: ${keyType}`);
     }
+  }
+
+  /**
+   * 解密 OpenSSH 新格式私钥的私钥段。
+   *
+   * kdfoptions 形如 `string salt; uint32 rounds;`（现已限定 bcrypt）。派生出
+   * 的字节流前 `keyBytes` 字节是加密密钥、随后 16 字节是 IV。
+   *
+   * 注意这里刻意不使用 WebCrypto 的 AES-CBC：OpenSSH 使用递增计数器填充
+   * （1,2,3,...,N）而非 PKCS#7，WebCrypto 会校验失败并直接抛错。
+   */
+  private static async decryptOpenSSHPrivateSection(
+    ciphertext: Uint8Array,
+    cipher: string,
+    kdfOptions: Uint8Array,
+    passphrase?: string,
+  ): Promise<Uint8Array> {
+    if (!passphrase) {
+      throw new Error('This private key is encrypted; please provide its passphrase');
+    }
+    const keyBytes = PRIVATE_KEY_CIPHER_KEY_BYTES[cipher];
+    if (!keyBytes) throw new Error(`Unsupported private key cipher "${cipher}"`);
+    if (cipher.endsWith('-cbc') && ciphertext.length % 16 !== 0) {
+      throw new Error('Encrypted private key section is not block aligned');
+    }
+
+    // kdfoptions: string salt + uint32 rounds
+    if (kdfOptions.length < 8) throw new Error('Malformed bcrypt KDF options');
+    const saltLen = readUint32(kdfOptions, 0);
+    if (saltLen === 0 || kdfOptions.length !== 4 + saltLen + 4) {
+      throw new Error('Malformed bcrypt salt');
+    }
+    const salt = kdfOptions.slice(4, 4 + saltLen);
+    const rounds = readUint32(kdfOptions, 4 + saltLen);
+
+    const derived = await bcryptPbkdf(passphrase, salt, keyBytes + 16, rounds);
+    const key = derived.slice(0, keyBytes);
+    const iv = derived.slice(keyBytes, keyBytes + 16);
+
+    if (cipher.endsWith('-ctr')) {
+      const ctr = new aes.ModeOfOperation.ctr(key, new aes.Counter(iv));
+      return new Uint8Array(ctr.decrypt(ciphertext));
+    }
+    const cbc = new aes.ModeOfOperation.cbc(key, iv);
+    return new Uint8Array(cbc.decrypt(ciphertext));
   }
 
   /**
@@ -307,6 +396,7 @@ export class SSHAuth {
     privSection: Uint8Array,
     offset: number,
     outerPublicKeyBlob: Uint8Array,
+    blockSize: number,
   ): Promise<ParsedKey> {
     let po = offset;
 
@@ -328,7 +418,7 @@ export class SSHAuth {
     }
 
     this.validateEd25519PublicBlob(outerPublicKeyBlob, pubKeyRaw);
-    this.validatePrivateSectionTail(privSection, po);
+    this.validatePrivateSectionTail(privSection, po, blockSize);
 
     const seed = privKeyRaw.slice(0, 32);
 
@@ -353,6 +443,7 @@ export class SSHAuth {
     privSection: Uint8Array,
     offset: number,
     outerPublicKeyBlob: Uint8Array,
+    blockSize: number,
   ): Promise<ParsedKey> {
     let po = offset;
 
@@ -371,7 +462,7 @@ export class SSHAuth {
 
     this.validateRSAPublicBlob(outerPublicKeyBlob, e, n);
     this.validateRSAComponents(n, e, d, iqmp, p, q);
-    this.validatePrivateSectionTail(privSection, po);
+    this.validatePrivateSectionTail(privSection, po, blockSize);
 
     const pkcs8 = this.buildRSAPKCS8(n, e, d, p, q, iqmp);
 
@@ -390,6 +481,7 @@ export class SSHAuth {
     offset: number,
     keyType: string,
     outerPublicKeyBlob: Uint8Array,
+    blockSize: number,
   ): Promise<ParsedKey> {
     let po = offset;
 
@@ -440,7 +532,7 @@ export class SSHAuth {
       throw new Error('Malformed ECDSA public key point');
     }
     this.validateECDSAPublicBlob(outerPublicKeyBlob, keyType, curve, pubKeyRaw);
-    this.validatePrivateSectionTail(privSection, po);
+    this.validatePrivateSectionTail(privSection, po, blockSize);
 
     const pkcs8 = this.buildECDSAPKCS8(namedCurve, privKeyRaw);
 
@@ -511,10 +603,12 @@ export class SSHAuth {
     }
   }
 
-  private static validatePrivateSectionTail(section: Uint8Array, offset: number): void {
+  private static validatePrivateSectionTail(section: Uint8Array, offset: number, blockSize: number): void {
     const comment = this.readSSHString(section, offset, 'private key comment');
     const paddingLength = section.length - comment.offset;
-    if (section.length % 8 !== 0 || paddingLength > 7) {
+    // 填充长度取决于块大小，而不是固定 8：加密私钥（AES 块 16）的填充可以有 8~16 字节，
+    // 曾经写死 <=7，导致填充较大的密钥（多数 RSA）被误判成格式损坏而无法连接。
+    if (section.length % blockSize !== 0 || paddingLength > blockSize) {
       throw new Error('Malformed OpenSSH private key padding');
     }
     for (let i = 0; i < paddingLength; i++) {

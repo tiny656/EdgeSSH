@@ -1,5 +1,5 @@
-import { SSH_MSG_KEX_ECDH_INIT } from '../types';
-import { concat, readUint32, encodeString, toBufferSource, x25519SecretToSSHMPInt } from './utils';
+import { SSH_MSG_KEX_ECDH_INIT } from '../types.ts';
+import { concat, readUint32, encodeString, toBufferSource, x25519SecretToSSHMPInt } from './utils.ts';
 
 type X25519SubtleCrypto = {
   generateKey(

@@ -1,4 +1,4 @@
-import { toBufferSource, writeUint32 } from './utils';
+import { toBufferSource, writeUint32 } from './utils.ts';
 
 function buildMacData(seqNum: number, packet: Uint8Array): Uint8Array {
   const data = new Uint8Array(4 + packet.length);

@@ -1,5 +1,5 @@
-import { SSH_MSG_KEX_ECDH_INIT } from '../types';
-import { concat, readUint32, encodeString, toBufferSource, toSSHMPInt } from './utils';
+import { SSH_MSG_KEX_ECDH_INIT } from '../types.ts';
+import { concat, readUint32, encodeString, toBufferSource, toSSHMPInt } from './utils.ts';
 
 type ECDHSubtleCrypto = {
   generateKey(

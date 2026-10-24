@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { build } from 'esbuild';
 import { Miniflare } from 'miniflare';
 import { decryptHost, encryptHost } from '../src/accounts/crypto.ts';
+import { MISSING_SSH_KEYGEN, encryptedKeyFixture, hasSshKeygen } from './fixtures/encrypted-keys.ts';
 
 const bundle = await build({
   stdin: { contents: `export * from './src/accounts/keychain.ts'; export * from './src/accounts/hosts.ts';
@@ -34,7 +35,20 @@ function fixture() {
     };
     return statement;
   };
-  const env = { ENCRYPTION_KEY: Buffer.alloc(32, 3).toString('base64'), DB: { prepare } };
+  const keyInfoCalls: { objectId: string; accountId: string | null }[] = [];
+  const env = {
+    ENCRYPTION_KEY: Buffer.alloc(32, 3).toString('base64'), DB: { prepare },
+    SSH_SESSIONS: {
+      idFromName(name: string) { return name; },
+      get(objectId: string) {
+        return { async fetch(request: Request): Promise<Response> {
+          keyInfoCalls.push({ objectId, accountId: request.headers.get('x-account-id') });
+          const object = new SSHSessionDO({ getWebSockets: () => [] }, env);
+          return object.fetch(request);
+        } };
+      },
+    },
+  };
   const request = async (method = 'GET', id = '', body?: unknown, owner = 'owner') => {
     const path = `/api/keychain${id ? `/${id}` : ''}`;
     return keychainRoute(new Request(`https://example.com${path}`, {
@@ -42,7 +56,7 @@ function fixture() {
     }), env, owner, path);
   };
   const create = async () => (await (await request('POST', '', { name: '测试密钥', generate: true })).json()).key;
-  return { sqlite, env, request, create };
+  return { sqlite, env, request, create, keyInfoCalls };
 }
 
 test('生成 OpenSSH Ed25519 私钥可被现有认证器解析并签名', async () => {
@@ -176,6 +190,42 @@ test('主机仅保存密钥引用、凭据接口不泄露私钥，引用中的�
   await f.request('DELETE', key.id);
 });
 
+test('主机只对同一凭据保留口令，更换私钥或密钥引用时清除旧口令', async (context) => {
+  if (!hasSshKeygen()) return context.skip(MISSING_SSH_KEYGEN);
+  const f = fixture(); context.after(() => f.sqlite.close());
+  const original = encryptedKeyFixture('ed25519Ctr');
+  const replacement = encryptedKeyFixture('ecdsaCtr');
+  const importKey = async (name: string, key: typeof original) =>
+    (await (await f.request('POST', '', { name, privateKey: key.pem, passphrase: key.passphrase })).json()).key;
+  const first = await importKey('原密钥', original);
+  const second = await importKey('新密钥', replacement);
+  const id = crypto.randomUUID();
+  const base = { name: '主机', group: '个人', host: '8.8.8.8', port: 22, username: 'root', authMethod: 'publickey', initialCommand: '', termType: 'xterm', encoding: 'utf-8', fingerprint: '', location: { country: 'Test' } };
+  const inline = { privateKey: original.pem, keyPassphrase: original.passphrase };
+  const reference = { keychainId: first.id, keyPassphrase: original.passphrase };
+  const cases = [
+    { label: '保留原私钥', previous: inline, update: {}, expected: original.passphrase },
+    { label: '提交同一私钥', previous: inline, update: { privateKey: original.pem }, expected: original.passphrase },
+    { label: '更换私钥', previous: inline, update: { privateKey: replacement.pem }, expected: undefined },
+    { label: '私钥改为密钥引用', previous: inline, update: { keychainId: second.id }, expected: undefined },
+    { label: '保留同一密钥引用', previous: reference, update: { keychainId: first.id }, expected: original.passphrase },
+    { label: '更换密钥引用', previous: reference, update: { keychainId: second.id }, expected: undefined },
+    { label: '显式清除口令', previous: reference, update: { keychainId: first.id, keyPassphrase: '' }, expected: undefined },
+    { label: '更新口令', previous: inline, update: { privateKey: replacement.pem, keyPassphrase: replacement.passphrase }, expected: replacement.passphrase },
+  ];
+  for (const { label, previous, update, expected } of cases) {
+    f.sqlite.prepare('INSERT OR REPLACE INTO hosts VALUES (?, ?, ?, ?)').run(id, 'owner',
+      await encryptHost({ ...base, ...previous }, f.env.ENCRYPTION_KEY, 'owner', id), 1);
+    const path = `/api/hosts/${id}`;
+    await hostsRoute(new Request(`https://example.com${path}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...base, ...update }),
+    }), f.env, 'owner', path);
+    const response = await hostsRoute(new Request(`https://example.com${path}/credentials`, { method: 'POST' }),
+      f.env, 'owner', `${path}/credentials`);
+    assert.equal((await response.json()).keyPassphrase, expected, label);
+  }
+});
+
 test('DO 只按票据工作区解密密钥并交给既有 SSH 会话', async (context) => {
   const f = fixture(); context.after(() => f.sqlite.close());
   const key = await f.create();
@@ -199,4 +249,50 @@ test('DO 只按票据工作区解密密钥并交给既有 SSH 会话', async (co
   }
   assert.equal(configs.length, 1);
   assert.equal(configs[0].privateKey, (await readKeychainKey(f.env, 'owner', key.id)).privateKey);
+});
+
+/** 导出走的是 action 路径，fixture 里的 request 助手不带 action，这里自己拼。 */
+async function exportKey(env: any, id: string) {
+  const path = `/api/keychain/${id}/private-key`;
+  const response = await keychainRoute(new Request(`https://example.com${path}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+  }), env, 'owner', path);
+  return await response.json() as any;
+}
+
+test('加密私钥经 DO 校验后保存：支持重命名与导出，错误口令保留中文提示', async (context) => {
+  const f = fixture(); context.after(() => f.sqlite.close());
+  if (!hasSshKeygen()) return context.skip(MISSING_SSH_KEYGEN);
+  const { pem, passphrase, fingerprint } = encryptedKeyFixture('ed25519Ctr');
+  const created = await f.request('POST', '', { name: '加密密钥', privateKey: pem, passphrase });
+  const { key } = await created.json();
+  const { id } = key;
+  assert.equal(key.fingerprint, fingerprint);
+  assert.deepEqual(f.keyInfoCalls, [{ objectId: 'keychain-validation:owner', accountId: 'owner' }]);
+
+  await f.request('PUT', id, { name: '重命名加密密钥' });
+  assert.equal(f.keyInfoCalls.length, 2);
+  assert.equal((await readKeychainKey(f.env, 'owner', id)).passphrase, passphrase);
+  await assert.rejects(f.request('PUT', id, { name: '错误口令', passphrase: 'definitely-wrong' }), /私钥口令不正确/);
+  assert.equal(f.keyInfoCalls.length, 3);
+
+  // 列表与保存响应都不能把口令或私钥回给浏览器。
+  const list = await (await f.request('GET')).json();
+  assert.equal('passphrase' in (list as any).keys[0], false);
+  assert.equal(JSON.stringify(list).includes(passphrase), false);
+  assert.equal(JSON.stringify(list).includes(pem), false);
+
+  // 导出的加密私钥若没有口令，用户拿到的文件根本无法使用。
+  const exported = await exportKey(f.env, id);
+  assert.equal(exported.privateKey, pem);
+  assert.equal(exported.passphrase, passphrase);
+});
+
+test('未加密私钥导出时不带口令字段', async (context) => {
+  const f = fixture(); context.after(() => f.sqlite.close());
+  const key = await f.create();
+  const exported = await exportKey(f.env, key.id);
+  assert.match(exported.privateKey, /^-----BEGIN OPENSSH PRIVATE KEY-----/);
+  assert.equal('passphrase' in exported, false);
+  assert.equal(f.keyInfoCalls.length, 0);
 });

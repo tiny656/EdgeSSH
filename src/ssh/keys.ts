@@ -1,5 +1,5 @@
-import { SessionKeys } from '../types';
-import { concat, toBufferSource } from './utils';
+import { SessionKeys } from '../types.ts';
+import { concat, toBufferSource } from './utils.ts';
 
 export class KeyDerivation {
   static async deriveKeys(

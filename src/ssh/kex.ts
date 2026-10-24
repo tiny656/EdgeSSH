@@ -1,10 +1,10 @@
-import { SSH_MSG_KEXINIT, KEXInitMessage } from '../types';
+import { SSH_MSG_KEXINIT, KEXInitMessage } from '../types.ts';
 import {
   SUPPORTED_ENCRYPTION_ALGORITHMS,
   SUPPORTED_KEX_ALGORITHMS,
   SUPPORTED_MAC_ALGORITHMS
-} from './algorithms';
-import { concat } from './utils';
+} from './algorithms.ts';
+import { concat } from './utils.ts';
 
 export class KEXInitBuilder {
   static build(): Uint8Array {

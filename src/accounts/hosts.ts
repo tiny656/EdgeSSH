@@ -15,6 +15,7 @@ export interface HostPayload {
   password?: string;
   privateKey?: string;
   keychainId?: string;
+  keyPassphrase?: string;
   initialCommand: string;
   termType: string;
   encoding: string;
@@ -29,7 +30,7 @@ const LOCATION_RETRY_MS = 24 * 60 * 60 * 1000;
 const LOCATION_REFRESH_BATCH = 8;
 
 function metadata(id: string, payload: HostPayload, updatedAt: number) {
-  const { password, privateKey, locationCheckedAt, ...safe } = payload;
+  const { password, privateKey, keyPassphrase, locationCheckedAt, ...safe } = payload;
   return { ...safe, system: payload.system ?? null, id, updatedAt, hasCredential: password !== undefined || Boolean(privateKey) || Boolean(payload.keychainId) };
 }
 
@@ -63,10 +64,18 @@ function validate(body: Record<string, unknown>, previous?: HostPayload): HostPa
       : body.privateKey !== undefined ? { privateKey: body.privateKey }
         : previous?.keychainId ? { keychainId: previous.keychainId } : { privateKey: previous?.privateKey }
     : { password: body.password ?? (previous && previous.authMethod === authMethod ? previous.password : undefined) };
+  // 只有沿用同一私钥或密钥引用时才保留旧口令；更换凭据后不能把旧口令套给新密钥。
+  const sameCredential = previous?.authMethod === 'publickey'
+    && ('keychainId' in credential ? credential.keychainId === previous.keychainId
+      : !previous.keychainId && credential.privateKey === previous.privateKey);
+  const keyPassphrase = authMethod === 'publickey'
+    ? ((typeof body.keyPassphrase === 'string' ? body.keyPassphrase : sameCredential ? previous?.keyPassphrase : undefined) || undefined)
+    : undefined;
   let connection;
   try {
     connection = parseConnectMessage({
       type: 'connect', host: body.host, port: body.port, username: body.username, authMethod, ...credential,
+      ...(keyPassphrase !== undefined ? { keyPassphrase } : {}),
       term: body.termType, expectedFingerprint: body.fingerprint || undefined,
     });
   } catch { throw new APIError('请检查主机地址、端口、用户名、凭据和指纹格式。'); }
@@ -79,6 +88,7 @@ function validate(body: Record<string, unknown>, previous?: HostPayload): HostPa
     host: connection.host, port: connection.port, username: connection.username,
     authMethod: connection.authMethod, password: connection.password, privateKey: connection.privateKey,
     keychainId: connection.keychainId,
+    keyPassphrase: connection.keyPassphrase,
     initialCommand: text(body, 'initialCommand', 4096), termType: connection.term,
     encoding, fingerprint: connection.expectedFingerprint ?? '', location: previous?.location ?? null,
     locationCheckedAt: previous?.locationCheckedAt,
@@ -123,7 +133,7 @@ export async function hostsRoute(request: Request, env: Env, accountId: string, 
     }
     previous = await decryptHost<HostPayload>(previousRow.encrypted_payload, env.ENCRYPTION_KEY, accountId, id);
     if (action === 'credentials' && request.method === 'POST') {
-      return json({ password: previous.password, privateKey: previous.privateKey, keychainId: previous.keychainId });
+      return json({ password: previous.password, privateKey: previous.privateKey, keychainId: previous.keychainId, keyPassphrase: previous.keyPassphrase });
     }
     if (action === 'location' && request.method === 'POST') {
       await refreshLocation(previous);

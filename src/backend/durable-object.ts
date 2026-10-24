@@ -3,6 +3,7 @@ import { parseConnectMessage, type Env } from '../types';
 import { assertPublicTarget, toSocketHostname } from './security';
 import { createTicket, verifyTicket } from './security';
 import { SSHSession, SSHAuthDefectError } from './session';
+import { SSHAuth } from '../ssh/auth';
 import { readKeychainKey } from '../accounts/keychain';
 import { APIError } from '../accounts/http';
 import { ForwardingState } from '../forwarding/state';
@@ -71,6 +72,15 @@ export class SSHSessionDO implements DurableObject {
     if (url.pathname === '/preview-launch' || url.pathname === '/preview-http') return this.forwarding.preview(request);
     const accountId = request.headers.get('x-account-id');
     if (!accountId) return Response.json({ error: 'Authentication required' }, { status: 401 });
+    // 已认证的密钥库 API 通过 binding 调用，不创建 SSH 会话或写入存储。
+    if (url.pathname === '/keychain-key-info' && request.method === 'POST') {
+      const { privateKey, passphrase } = await request.json<{ privateKey: string; passphrase: string }>();
+      try {
+        return Response.json(await SSHAuth.publicKeyInfo(privateKey, passphrase));
+      } catch (error) {
+        return Response.json({ error: error instanceof Error ? error.message : 'Invalid private key' }, { status: 400 });
+      }
+    }
     if (url.pathname === '/ticket' && request.method === 'POST') {
       const ip = request.headers.get('x-client-ip') ?? 'unknown';
       if (!/^[0-9a-f:.]{2,64}$|^local$|^unknown$/i.test(ip)) return Response.json({ error: 'Invalid client address' }, { status: 400 });
@@ -185,7 +195,13 @@ export class SSHSessionDO implements DurableObject {
         await session.handleClientMessage(message);
         return;
       }
-      if (this.pendingConnections.has(ws)) throw new Error('An SSH connection is already being initialized');
+      if (this.pendingConnections.has(ws)) {
+        // 只有重复的 connect 才算冲突。终端尺寸变化这类控制消息在 SSH 会话建立之前到达
+        // 属于正常的时序竞争（例如进入终端触发的 ResizeObserver），忽略即可；按错误处理
+        // 会把正在握手的连接一起掐断。
+        if (!this.isConnectFrame(message)) return;
+        throw new Error('An SSH connection is already being initialized');
+      }
       if (typeof message !== 'string' || message.length > 160 * 1024) throw new Error('The first WebSocket message must be a connect JSON object');
       let decoded: unknown;
       try { decoded = JSON.parse(message); } catch { throw new Error('Invalid connect JSON'); }
@@ -198,7 +214,12 @@ export class SSHSessionDO implements DurableObject {
       if (config.keychainId) {
         const accountId = await this.state.storage.get<string>('account-id');
         // 使用票据绑定的工作区取密钥，浏览器只发送引用，不能指定其他账户。
-        try { config.privateKey = (await readKeychainKey(this.env, accountId!, config.keychainId)).privateKey; }
+        try {
+          const entry = await readKeychainKey(this.env, accountId!, config.keychainId);
+          config.privateKey = entry.privateKey;
+          // 密钥链里存的口令作为缺省值，连接消息里显式带的口令优先。
+          if (!config.keyPassphrase && entry.passphrase) config.keyPassphrase = entry.passphrase;
+        }
         catch (error) {
           if (error instanceof APIError && error.status === 404) throw new SSHAuthDefectError('密钥不存在，请重新选择密钥链。');
           throw new Error('密钥链读取失败，请稍后重试。');
@@ -256,6 +277,19 @@ export class SSHSessionDO implements DurableObject {
   async alarm(): Promise<void> {
     await this.state.storage.delete(TICKET_STORAGE_KEY);
     await this.state.storage.delete('account-id');
+  }
+
+  /**
+   * 判断报文是否为连接请求，用于在握手未完成时区分「重复 connect」与「提前到达的控制消息」。
+   * 无法解析的一律按非连接报文处理，交由调用方忽略。
+   */
+  private isConnectFrame(message: unknown): boolean {
+    if (typeof message !== 'string' || message.length > 160 * 1024) return false;
+    try {
+      return (JSON.parse(message) as { type?: unknown } | null)?.type === 'connect';
+    } catch {
+      return false;
+    }
   }
 
   private connectTimeout(): number {

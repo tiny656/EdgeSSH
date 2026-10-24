@@ -24,6 +24,43 @@
   --surface-2: #17212b;
   --surface-3: #1c2935;
   --terminal: #080d12;
+  --term-chrome: #101820;
+  --term-panel: #0d151c;
+  --term-control: #151f28;
+  --term-control-border: #2a3b48;
+  --term-control-border-hover: #496171;
+  --term-control-text: #d7e2e6;
+  --term-border: #1c2932;
+  --term-muted: #8799a5;
+  --term-muted-2: #718590;
+  --term-input: #080d12;
+  --term-scrollbar: #31424e;
+  --term-hover: #1b2933;
+  --term-menu: #17212b;
+  --term-focus: #315a4d;
+  --term-accent: #69e6b4;
+  --term-accent-text: #94f2ca;
+  --term-accent-soft: rgba(105, 230, 180, 0.12);
+  --term-key-alt-border: #284969;
+  --term-key-alt-text: #8bc8ff;
+  --term-send-border: #397b65;
+  --term-send-bg: #1d5f4a;
+  --term-send-text: #f2fff9;
+  --term-send-hover: #25765b;
+  --term-scanline: rgba(255, 255, 255, 0.012);
+  --term-rate-up: #e0857a;
+  --term-rate-down: #82c898;
+  --term-title: #c5d2db;
+  --term-metric-text: #a8b8c1;
+  --term-metric-label: #8fa2ad;
+  --term-metric-value: #d4e0e5;
+  --term-metric-detail: #9aadb7;
+  --term-usage-mix: 88%;
+  --term-track: #263642;
+  --term-card: #182530;
+  --term-card-edge: rgba(0, 0, 0, 0);
+  --term-select-bg: #182530;
+  --term-select-border: #263642;
   --border: #253341;
   --border-soft: #19242e;
   --text: #e9f0f3;
@@ -49,7 +86,44 @@
   --surface: #ffffff;
   --surface-2: #edf4f3;
   --surface-3: #e4eeec;
-  --terminal: #0b1217;
+  --terminal: #ffffff;
+  --term-chrome: #e7f0ee;
+  --term-panel: #dcebe8;
+  --term-control: #ffffff;
+  --term-control-border: #b7cac8;
+  --term-control-border-hover: #8ba49f;
+  --term-control-text: #1b2a30;
+  --term-border: #c5d5d3;
+  --term-muted: #4f6369;
+  --term-muted-2: #566e74;
+  --term-input: #ffffff;
+  --term-scrollbar: #9fb5b3;
+  --term-hover: #d2e5e1;
+  --term-menu: #ffffff;
+  --term-focus: #8cc4b1;
+  --term-accent: #0f7a58;
+  --term-accent-text: #0b6349;
+  --term-accent-soft: rgba(15, 122, 88, 0.12);
+  --term-key-alt-border: #a6c7e2;
+  --term-key-alt-text: #1a5f9c;
+  --term-send-border: #68ab92;
+  --term-send-bg: #dff0e9;
+  --term-send-text: #0b5c45;
+  --term-send-hover: #cbe5da;
+  --term-scanline: rgba(23, 35, 41, 0.035);
+  --term-rate-up: #b2473c;
+  --term-rate-down: #177a4e;
+  --term-title: #10323b;
+  --term-metric-text: #3d545a;
+  --term-metric-label: #53686e;
+  --term-metric-value: #14272d;
+  --term-metric-detail: #587077;
+  --term-usage-mix: 40%;
+  --term-track: #ccdcda;
+  --term-card: #eff5f3;
+  --term-card-edge: #bcd0cd;
+  --term-select-bg: #ffffff;
+  --term-select-border: #b7cac8;
   --border: #cbd9d8;
   --border-soft: #dce7e5;
   --text: #172329;
@@ -170,6 +244,8 @@ button:disabled {
 
 .brand-group,
 .topbar-actions {
+  /* 顶栏注入的导航按钮（文件管理 / 主机总览 / 端口转发）会撑宽这一组；允许收缩才能避免溢出屏幕。 */
+  min-width: 0;
   gap: 12px;
 }
 
@@ -555,12 +631,29 @@ button:disabled {
   font-weight: 700;
 }
 
+.profile-avatar.region {
+  padding: 0;
+  background: color-mix(in srgb, var(--surface-3) 60%, transparent);
+}
+
+.profile-avatar.region .country-flag {
+  width: 24px;
+  height: 18px;
+  border-radius: 2px;
+}
+
+.profile-avatar.region.unknown {
+  font-size: 14px;
+  color: var(--muted-2);
+}
+
 .profile-copy {
   min-width: 0;
 }
 
 .profile-copy strong,
-.profile-copy time {
+.profile-copy time,
+.profile-copy .profile-address {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -570,6 +663,13 @@ button:disabled {
 .profile-copy strong {
   margin-bottom: 3px;
   font-size: 12px;
+}
+
+.profile-copy .profile-address {
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
 }
 
 .profile-copy time,
@@ -968,12 +1068,12 @@ button:disabled {
 
 .session-target strong {
   margin-bottom: 2px;
-  color: #c5d2db;
+  color: var(--term-title);
   font-size: 12px;
 }
 
 .session-target span {
-  color: #6f818d;
+  color: var(--term-muted-2);
   font-family: var(--mono);
   font-size: 9px;
 }
@@ -989,7 +1089,7 @@ button:disabled {
 .session-metrics > div {
   min-width: 72px;             /* widened from 53px to cover "01:00:00" / "999 ms" content without sub-pixel re-layout */
   padding: 0 7px;
-  border-left: 1px solid #1c2932;
+  border-left: 1px solid var(--term-border);
   font-variant-numeric: tabular-nums;  /* tabular numerals — defensive even though --mono is monospace */
 }
 
@@ -1011,7 +1111,7 @@ button:disabled {
 .resource-metric {
   min-width: 60px;             /* integer-pixel floor — absorbs sub-pixel flex-distribution jitter from sibling .session-metrics */
   flex: 1 1 0;
-  color: #a8b8c1;
+  color: var(--term-metric-text);
   font-family: var(--mono);
   font-size: 10px;
   white-space: nowrap;
@@ -1019,7 +1119,7 @@ button:disabled {
 
 .resource-metric + .resource-metric {
   padding-left: 12px;
-  border-left: 1px solid #1c2932;
+  border-left: 1px solid var(--term-border);
 }
 
 .resource-metric-line {
@@ -1031,7 +1131,7 @@ button:disabled {
 
 .resource-metric-line > span {
   flex: 0 0 auto;
-  color: #8fa2ad;
+  color: var(--term-metric-label);
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.02em;
@@ -1040,14 +1140,17 @@ button:disabled {
 .resource-metric-line > strong {
   flex: 0 0 auto;
   overflow: hidden;
-  color: #d4e0e5;
+  color: var(--term-metric-value);
   font-size: 10px;
   font-weight: 750;
   text-overflow: ellipsis;
 }
 
+/* Usage colors come from usageColor() (hsl at 58% lightness, tuned for the dark
+   surface). In the light theme they read as washed-out text, so pull them toward
+   the theme text color first — the mix ratio is theme-owned, not hardcoded. */
 .resource-metric-line > .resource-percentage {
-  color: color-mix(in srgb, var(--usage-color, #d4e0e5) 88%, var(--text));
+  color: color-mix(in srgb, var(--usage-color, var(--term-metric-value)) var(--term-usage-mix, 88%), var(--text));
   font-weight: 900;
   transition: color 220ms ease;
 }
@@ -1055,7 +1158,7 @@ button:disabled {
 .resource-metric-line > .resource-detail {
   min-width: 0;
   flex: 1 1 auto;
-  color: #9aadb7;
+  color: var(--term-metric-detail);
   font-weight: 400;
   text-align: right;
 }
@@ -1073,7 +1176,7 @@ button:disabled {
 
 .resource-metric progress::-webkit-progress-bar {
   border-radius: 99px;
-  background: #263642;
+  background: var(--term-track);
 }
 
 .resource-metric progress::-webkit-progress-value {
@@ -1092,8 +1195,11 @@ button:disabled {
   display: block;
   height: 12px;
   margin-top: 1px;
-  background: #182530;
+  background: var(--term-card);
   border-radius: 4px;
+  /* inset ring instead of a real border: gives the light theme a visible card
+     edge without changing the box size this element relies on to stay stable */
+  box-shadow: inset 0 0 0 1px var(--term-card-edge);
   /* Width is now content-driven (canvas drawing buffer = 184px HTML attr),
      with explicit floor/ceiling so the parent's flex algorithm has a stable
      size to compute against — breaks the previous width: 100% cycle that
@@ -1108,7 +1214,7 @@ button:disabled {
 
 .resource-network #resource-network-iface {
   flex: 0 0 auto;
-  color: #8fa2ad;
+  color: var(--term-metric-label);
   font-weight: 400;
   letter-spacing: 0.02em;
 }
@@ -1121,12 +1227,12 @@ button:disabled {
   min-width: 52px;
   max-width: 110px;
   padding: 0 4px;
-  color: #d4e0e5;
+  color: var(--term-metric-value);
   font-family: var(--mono);
   font-size: 10px;
   line-height: 1.4;
-  background: #182530;
-  border: 1px solid #263642;
+  background: var(--term-select-bg);
+  border: 1px solid var(--term-select-border);
   border-radius: 4px;
   cursor: pointer;
 }
@@ -1139,8 +1245,8 @@ button:disabled {
    native picker readable on every platform. Note: iOS Safari renders its own
    system wheel picker that is not styleable via CSS (platform limitation). */
 .resource-network .resource-network-select option {
-  background-color: #182530;
-  color: #d4e0e5;
+  background-color: var(--term-select-bg);
+  color: var(--term-metric-value);
 }
 
 .resource-network .resource-network-select:hover,
@@ -1164,11 +1270,11 @@ button:disabled {
 }
 
 .resource-network #resource-network-rate-up {
-  color: #e0857a;            /* upload (↑) — softer red */
+  color: var(--term-rate-up);            /* upload (↑) — softer red */
 }
 
 .resource-network #resource-network-rate-down {
-  color: #82c898;            /* download (↓) — softer green */
+  color: var(--term-rate-down);            /* download (↓) — softer green */
 }
 
 /* Desktop default: collapse the wrapper to inline so the up/down pair sits
@@ -1185,7 +1291,7 @@ button:disabled {
 
 .session-metrics span {
   margin-bottom: 2px;
-  color: #81939e;
+  color: var(--term-muted);
   font-size: 8px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -1193,7 +1299,7 @@ button:disabled {
 
 .session-metrics strong {
   overflow: hidden;
-  color: #8799a5;
+  color: var(--term-muted);
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1237,9 +1343,9 @@ button:disabled {
   align-items: center;
   gap: 12px;
   padding: 0 11px;
-  border-bottom: 1px solid #1c2932;
-  background: #101820;
-  color: #8799a5;
+  border-bottom: 1px solid var(--term-border);
+  background: var(--term-chrome);
+  color: var(--term-muted);
 }
 
 .window-controls {
@@ -1275,9 +1381,9 @@ button:disabled {
   justify-content: center;
   gap: 5px;
   padding: 5px 7px;
-  border-color: #263642;
-  background: #151f28;
-  color: #8497a3;
+  border-color: var(--border);
+  background: var(--term-control);
+  color: var(--term-muted);
   font-size: 8px;
 }
 
@@ -1288,7 +1394,7 @@ button:disabled {
   overflow: hidden;
   padding: 10px 8px 7px 12px;
   background:
-    linear-gradient(rgba(255, 255, 255, 0.012) 50%, transparent 50%) 0 0 / 100% 4px,
+    linear-gradient(var(--term-scanline) 50%, transparent 50%) 0 0 / 100% 4px,
     var(--terminal);
 }
 
@@ -1297,18 +1403,26 @@ button:disabled {
   height: 100%;
 }
 
+/* xterm ships `.xterm .xterm-viewport { background-color: #000 }`. The viewport
+   is taller than the rows whenever the grid does not fill it, so the leftover
+   strip directly above the key bar rendered black in every theme. Paint it with
+   the same surface color instead. */
+.terminal-stage .xterm .xterm-viewport {
+  background-color: var(--terminal);
+}
+
 .terminal-tools {
   min-width: 0;
-  border-top: 1px solid #1c2932;
-  background: #0d151c;
-  color: #d7e2e6;
+  border-top: 1px solid var(--term-border);
+  background: var(--term-panel);
+  color: var(--term-control-text);
 }
 
 .terminal-keybar {
   display: grid;
   min-width: 0;
   grid-template-columns: minmax(0, 1fr) auto;
-  border-bottom: 1px solid #1c2932;
+  border-bottom: 1px solid var(--term-border);
 }
 
 .terminal-key-scroll {
@@ -1317,7 +1431,7 @@ button:disabled {
   gap: 5px;
   overflow-x: auto;
   padding: 5px 8px;
-  scrollbar-color: #31424e transparent;
+  scrollbar-color: var(--term-scrollbar) transparent;
   scrollbar-width: thin;
   overscroll-behavior-x: contain;
 }
@@ -1329,10 +1443,10 @@ button:disabled {
 .command-editor-send-menu,
 .command-editor-close,
 .command-send-options button {
-  border: 1px solid #2a3b48;
+  border: 1px solid var(--term-control-border);
   border-radius: 6px;
-  background: #151f28;
-  color: #d7e2e6;
+  background: var(--term-control);
+  color: var(--term-control-text);
 }
 
 .terminal-key {
@@ -1351,14 +1465,14 @@ button:disabled {
 .terminal-key:hover:not(:disabled),
 .terminal-key:active:not(:disabled),
 .terminal-key[aria-pressed='true'] {
-  border-color: #69e6b4;
-  background: rgba(105, 230, 180, 0.12);
-  color: #94f2ca;
+  border-color: var(--term-accent);
+  background: var(--term-accent-soft);
+  color: var(--term-accent-text);
 }
 
 .terminal-key-control {
-  border-color: #284969;
-  color: #8bc8ff;
+  border-color: var(--term-key-alt-border);
+  color: var(--term-key-alt-text);
 }
 
 .terminal-key-arrow {
@@ -1380,7 +1494,7 @@ button:disabled {
   gap: 6px;
   margin: 5px 8px 5px 0;
   padding: 0 9px;
-  color: #94f2ca;
+  color: var(--term-accent-text);
   font-size: 11px;
   font-weight: 700;
   white-space: nowrap;
@@ -1398,8 +1512,8 @@ button:disabled {
 
 .command-editor-toggle:hover,
 .command-editor-toggle[aria-expanded='true'] {
-  border-color: #69e6b4;
-  background: rgba(105, 230, 180, 0.1);
+  border-color: var(--term-accent);
+  background: var(--term-accent-soft);
 }
 
 .command-editor {
@@ -1407,7 +1521,7 @@ button:disabled {
   height: 176px;
   min-height: 0;
   grid-template-rows: 34px minmax(0, 1fr) 42px;
-  background: #101820;
+  background: var(--term-chrome);
 }
 
 .command-editor-header {
@@ -1415,8 +1529,8 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   padding: 0 8px 0 12px;
-  border-bottom: 1px solid #1c2932;
-  color: #9fb0ba;
+  border-bottom: 1px solid var(--term-border);
+  color: var(--term-muted);
   font-size: 11px;
 }
 
@@ -1427,15 +1541,15 @@ button:disabled {
   place-items: center;
   border-color: transparent;
   background: transparent;
-  color: #8497a3;
+  color: var(--term-muted);
   font-size: 18px;
   line-height: 1;
 }
 
 .command-editor-close:hover {
-  border-color: #2a3b48;
-  background: #17222b;
-  color: #e9f0f3;
+  border-color: var(--term-control-border);
+  background: var(--term-hover);
+  color: var(--term-control-text);
 }
 
 #command-editor-input {
@@ -1446,8 +1560,8 @@ button:disabled {
   border-radius: 0;
   outline: 0;
   padding: 10px 12px;
-  background: #080d12;
-  color: #d7e2e6;
+  background: var(--term-input);
+  color: var(--term-control-text);
   font-family: var(--mono);
   font-size: 12px;
   line-height: 1.55;
@@ -1456,11 +1570,11 @@ button:disabled {
 }
 
 #command-editor-input::placeholder {
-  color: #5e707d;
+  color: var(--muted-2);
 }
 
 #command-editor-input:focus {
-  box-shadow: inset 0 0 0 1px #315a4d;
+  box-shadow: inset 0 0 0 1px var(--term-focus);
 }
 
 .command-editor-actions {
@@ -1468,7 +1582,7 @@ button:disabled {
   align-items: center;
   gap: 7px;
   padding: 5px 8px;
-  border-top: 1px solid #1c2932;
+  border-top: 1px solid var(--term-border);
 }
 
 .command-editor-action,
@@ -1481,8 +1595,8 @@ button:disabled {
 }
 
 .command-editor-action:hover:not(:disabled) {
-  border-color: #496171;
-  background: #1b2933;
+  border-color: var(--term-control-border-hover);
+  background: var(--term-hover);
 }
 
 .command-send-group {
@@ -1493,9 +1607,9 @@ button:disabled {
 
 .command-editor-send {
   border-radius: 6px 0 0 6px;
-  border-color: #397b65;
-  background: #1d5f4a;
-  color: #f2fff9;
+  border-color: var(--term-send-border);
+  background: var(--term-send-bg);
+  color: var(--term-send-text);
 }
 
 .command-editor-send-menu {
@@ -1503,14 +1617,14 @@ button:disabled {
   padding: 0;
   border-left: 0;
   border-radius: 0 6px 6px 0;
-  border-color: #397b65;
-  background: #1d5f4a;
-  color: #f2fff9;
+  border-color: var(--term-send-border);
+  background: var(--term-send-bg);
+  color: var(--term-send-text);
 }
 
 .command-editor-send:hover:not(:disabled),
 .command-editor-send-menu:hover:not(:disabled) {
-  background: #25765b;
+  background: var(--term-send-hover);
 }
 
 .command-editor-action:disabled,
@@ -1528,9 +1642,9 @@ button:disabled {
   display: grid;
   min-width: 132px;
   padding: 4px;
-  border: 1px solid #30424f;
+  border: 1px solid var(--term-control-border);
   border-radius: 7px;
-  background: #17212b;
+  background: var(--term-menu);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
 }
 
@@ -1542,8 +1656,8 @@ button:disabled {
 }
 
 .command-send-options button:hover {
-  background: #22313c;
-  color: #94f2ca;
+  background: var(--term-hover);
+  color: var(--term-accent-text);
 }
 
 @media (max-width: 760px) {
@@ -1580,7 +1694,7 @@ button:disabled {
 
 .xterm-viewport {
   overflow-x: hidden;
-  scrollbar-color: #31424e transparent;
+  scrollbar-color: var(--term-scrollbar) transparent;
   scrollbar-width: thin;
 }
 
@@ -1592,7 +1706,7 @@ button:disabled {
   justify-items: center;
   padding: 24px;
   background: var(--terminal);
-  color: #e9f0f3;
+  color: var(--text);
   text-align: center;
 }
 
@@ -1606,10 +1720,10 @@ button:disabled {
   height: 54px;
   margin-bottom: 14px;
   place-items: center;
-  border: 1px solid #294137;
+  border: 1px solid var(--term-accent);
   border-radius: 13px;
-  background: rgba(105, 230, 180, 0.08);
-  color: #69e6b4;
+  background: var(--term-accent-soft);
+  color: var(--term-accent);
   font-family: var(--mono);
   font-size: 16px;
   font-weight: 700;
@@ -1623,7 +1737,7 @@ button:disabled {
 .terminal-empty p {
   max-width: 430px;
   margin: 0 0 18px;
-  color: #718590;
+  color: var(--term-muted-2);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -1635,9 +1749,9 @@ button:disabled {
 }
 
 .terminal-empty .small-button {
-  border-color: #294137;
-  background: rgba(105, 230, 180, 0.08);
-  color: #69e6b4;
+  border-color: var(--term-accent);
+  background: var(--term-accent-soft);
+  color: var(--term-accent);
 }
 
 .event-bar {

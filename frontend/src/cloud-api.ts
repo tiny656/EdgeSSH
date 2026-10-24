@@ -31,7 +31,7 @@ export interface CloudHost {
   updatedAt: number;
 }
 
-export interface Credentials { password?: string; privateKey?: string; keychainId?: string }
+export interface Credentials { password?: string; privateKey?: string; keychainId?: string; keyPassphrase?: string }
 export type HostInput = Omit<CloudHost, 'id' | 'location' | 'system' | 'hasCredential' | 'updatedAt'> & Credentials;
 
 export class APIError extends Error {
@@ -70,10 +70,11 @@ export const saveHost = async (input: HostInput, id?: string): Promise<CloudHost
 export const removeHost = (id: string): Promise<{ ok: boolean }> => api(`/api/hosts/${id}`, 'DELETE');
 
 export interface KeychainKey { id: string; name: string; publicKey: string; fingerprint: string; updatedAt: number }
-export interface KeychainInput { name: string; privateKey?: string; publicKey?: string; generate?: boolean }
+export interface KeychainInput { name: string; privateKey?: string; publicKey?: string; generate?: boolean; passphrase?: string }
 export const listKeychain = async (): Promise<KeychainKey[]> => (await api<{ keys: KeychainKey[] }>('/api/keychain')).keys;
 export const saveKeychainKey = async (input: KeychainInput, id?: string): Promise<KeychainKey> =>
   (await api<{ key: KeychainKey }>(id ? `/api/keychain/${id}` : '/api/keychain', id ? 'PUT' : 'POST', input)).key;
 export const removeKeychainKey = (id: string): Promise<{ ok: boolean }> => api(`/api/keychain/${id}`, 'DELETE');
-export const exportKeychainKey = (id: string): Promise<{ privateKey: string }> => api(`/api/keychain/${id}/private-key`, 'POST');
+/** 导出私钥：加密私钥会附带口令，否则下载的文件无法使用。 */
+export const exportKeychainKey = (id: string): Promise<{ privateKey: string; passphrase?: string }> => api(`/api/keychain/${id}/private-key`, 'POST');
 export const generateKeychainKey = (): Promise<{ privateKey: string; publicKey: string }> => api('/api/keychain/generate', 'POST', {});

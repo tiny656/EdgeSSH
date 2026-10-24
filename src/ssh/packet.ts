@@ -1,5 +1,5 @@
-import { SSHPacket } from '../types';
-import { readUint32, writeUint32 } from './utils';
+import { SSHPacket } from '../types.ts';
+import { readUint32, writeUint32 } from './utils.ts';
 
 const EMPTY_BUFFER = new Uint8Array(0);
 const COMPACT_CHUNKS_THRESHOLD = 32;

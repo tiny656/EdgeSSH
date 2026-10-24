@@ -5,8 +5,8 @@ import {
   SSH_MSG_CHANNEL_REQUEST,
   SSH_MSG_CHANNEL_EOF,
   SSH_MSG_CHANNEL_CLOSE,
-} from '../types';
-import { encodeString, readUint32, writeUint32 } from './utils';
+} from '../types.ts';
+import { encodeString, readUint32, writeUint32 } from './utils.ts';
 
 const SESSION_FIELD = encodeString('session');
 const PTY_REQ_FIELD = encodeString('pty-req');

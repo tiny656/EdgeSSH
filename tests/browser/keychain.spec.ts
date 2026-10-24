@@ -83,6 +83,37 @@ test('默认直接导入，生成填入公私钥后单独保存、复制、编�
   await expect(page.locator('.keychain-list')).toHaveText('暂无密钥');
 });
 
+// 口令留空的语义分两种：换私钥时是「新私钥未加密」，不换私钥时是「沿用原口令」。
+// 后端用「字段存在与否」区分二者（不发送＝沿用原值），所以这一条必须锁住请求体。
+test('编辑密钥时的口令语义：换私钥清空、沿用则为原值、填写则更新', async ({ page }) => {
+  const f = await fixture(page);
+  await page.locator('#rail-keychain').click();
+  const editor = page.getByRole('dialog', { name: '编辑密钥', exact: true });
+  const lastBody = () => f.writes.filter((call) => call.method === 'PUT').at(-1)!.body;
+
+  // 换私钥但口令留空：必须显式发出空口令清掉旧口令，否则后端会把旧口令套用到新私钥上，
+  // 保存会直接失败于「私钥口令不正确」。
+  await page.getByRole('button', { name: `编辑密钥 ${key.name}` }).click();
+  await editor.getByLabel('私钥', { exact: true }).fill('test-only-replacement-key');
+  await editor.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(editor).toBeHidden();
+  expect(lastBody().passphrase).toBe('');
+
+  // 私钥留空即保留原私钥，此时不发口令字段＝沿用原口令。
+  await page.getByRole('button', { name: `编辑密钥 ${key.name}` }).click();
+  await editor.getByLabel('名称', { exact: true }).fill('沿用原口令');
+  await editor.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.locator('.keychain-row strong')).toHaveText('沿用原口令');
+  expect('passphrase' in lastBody()).toBe(false);
+
+  // 主动填写口令则照原样发送，用于给已保存的私钥补上或改掉口令。
+  await page.getByRole('button', { name: '编辑密钥 沿用原口令' }).click();
+  await editor.locator('[name="passphrase"]').fill('test-only-passphrase');
+  await editor.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(editor).toBeHidden();
+  expect(lastBody().passphrase).toBe('test-only-passphrase');
+});
+
 test('导入私钥文件与公钥，导出需用户确认', async ({ page }, testInfo) => {
   const f = await fixture(page, true);
   await page.locator('#rail-keychain').click();

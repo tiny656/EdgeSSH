@@ -12,6 +12,7 @@ import { resolveConnectionControl, resolveConnectionPanel } from './ui-state';
 import { classifyHostKey, SSH_FINGERPRINT_RE, type HostKeyPrompt } from './host-key';
 import { FileManager, collectFileManagerElements } from './file-manager';
 import { FileTree } from './file-tree';
+import { countryFlag } from './flags';
 import { ProcessManager, collectProcessManagerElements, type NetworkSample } from './process-manager';
 import { resetTerminalForConnection } from './terminal-session';
 import { createTerminalTools, type TerminalToolsController } from './terminal-tools';
@@ -55,6 +56,7 @@ interface ConnectionConfig {
   authMethod: AuthMethod;
   privateKey?: string;
   keychainId?: string;
+  keyPassphrase?: string;
   cols: number;
   rows: number;
   term: string;
@@ -149,9 +151,9 @@ const STATIC_MESSAGE_TRANSLATIONS: Record<string, string> = {
   '端口必须介于 1 和 65535 之间。': 'Port must be between 1 and 65535.',
   '请输入有效的 SSH 用户名。': 'Enter a valid SSH username.',
   '主机指纹必须使用 SHA256:base64 格式。': 'Host fingerprint must use the SHA256:base64 format.',
-  '请粘贴或选择未加密的 OpenSSH 私钥。': 'Paste or choose an unencrypted OpenSSH private key.',
+  '请粘贴或选择 OpenSSH 私钥。': 'Paste or choose an OpenSSH private key.',
   '私钥大于 64 KiB。': 'The private key is larger than 64 KiB.',
-  '仅支持未加密的 OpenSSH 私钥。': 'Only unencrypted OpenSSH private keys are supported.',
+  '仅支持 OpenSSH 私钥。': 'Only OpenSSH private keys are supported.',
   '请检查必填项和字段格式。': 'Check the required fields and their formats.',
 };
 
@@ -268,6 +270,8 @@ const ui = {
   keychainId: element<HTMLSelectElement>('keychain-id'),
   privateKey: element<HTMLTextAreaElement>('private-key'),
   keyFile: element<HTMLInputElement>('key-file'),
+  keyPassphraseField: element<HTMLElement>('key-passphrase-field'),
+  keyPassphrase: element<HTMLInputElement>('key-passphrase'),
   keyFileName: element<HTMLElement>('key-file-name'),
   initialCommand: element<HTMLInputElement>('initial-command'),
   termType: element<HTMLSelectElement>('term-type'),
@@ -423,7 +427,7 @@ let terminalTools: TerminalToolsController | undefined;
 let sshReconnectManager: WebSocketReconnectManager | null = null;
 let reconnectParams: {
   host: string; port: number; username: string; authMethod: string;
-  password?: string; privateKey?: string; keychainId?: string; pinnedKey?: string;
+  password?: string; privateKey?: string; keychainId?: string; keyPassphrase?: string; pinnedKey?: string;
   term: string; encoding: string;
 } | null = null;
 
@@ -491,7 +495,7 @@ function drawNetworkSparkline(): void {
   const slot = width / NET_SPARK_POINTS;
   // Leave a small gap between bars; floor so a 1px slot still draws a visible bar.
   const barWidth = Math.max(1, Math.floor(slot * 0.7));
-  ctx.fillStyle = '#69e6b4';
+  ctx.fillStyle = currentColorScheme() === 'light' ? '#0f7a58' : '#69e6b4';
   for (let i = 0; i < NET_SPARK_POINTS; i += 1) {
     const value = data[i];
     const normalized = (value - minimum) / span;
@@ -697,7 +701,40 @@ processManager = new ProcessManager({
   onNetworkSample: (sample, timestamp) => updateNetworkMetric(sample, timestamp),
 });
 
-function terminalTheme(): Record<string, string> {
+type ColorScheme = 'dark' | 'light';
+
+function currentColorScheme(): ColorScheme {
+  return document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+}
+
+// Declared as function bodies (not module-level consts) because `terminal` is
+// constructed above and reads this palette during module evaluation.
+function terminalTheme(scheme: ColorScheme = currentColorScheme()): Record<string, string> {
+  if (scheme === 'light') {
+    return {
+      background: '#ffffff',
+      foreground: '#1b2a30',
+      cursor: '#0f7a58',
+      cursorAccent: '#ffffff',
+      selectionBackground: '#c7e8da',
+      black: '#25343b',
+      red: '#c63d4b',
+      green: '#12825f',
+      yellow: '#a86c0c',
+      blue: '#246da8',
+      magenta: '#7b3fa8',
+      cyan: '#0f7285',
+      white: '#4a5c64',
+      brightBlack: '#6b8089',
+      brightRed: '#e05a68',
+      brightGreen: '#2aa37a',
+      brightYellow: '#c98a1e',
+      brightBlue: '#3d8fd0',
+      brightMagenta: '#9b5fd0',
+      brightCyan: '#1b97ad',
+      brightWhite: '#0f2027',
+    };
+  }
   return {
     background: '#080d12',
     foreground: '#d7e2e6',
@@ -721,6 +758,11 @@ function terminalTheme(): Record<string, string> {
     brightCyan: '#99edf5',
     brightWhite: '#f7fbfc',
   };
+}
+
+function applyTerminalTheme(): void {
+  terminal.options.theme = terminalTheme();
+  drawNetworkSparkline();
 }
 
 function passwordContext(profile: Pick<SavedProfile, 'host' | 'port' | 'username'>): string {
@@ -776,6 +818,8 @@ function setAuthMethod(method: AuthMethod | 'keychain'): void {
   ui.passwordField.hidden = method !== 'password';
   ui.keyField.hidden = method !== 'publickey';
   ui.keychainField.hidden = method !== 'keychain';
+  // 「上传私钥」与「密钥链」两种公钥方式都要能填口令
+  ui.keyPassphraseField.hidden = method !== 'publickey' && method !== 'keychain';
   ui.keychainId.required = method === 'keychain';
 }
 
@@ -804,6 +848,8 @@ function clearCredentials(): void {
   resetPasswordField();
   clearPrivateKeyFields();
   ui.keychainId.value = '';
+  // 不同主机的口令必须隔离，否则切到未加密/其他口令的主机会带着上一个主机的口令发出去。
+  ui.keyPassphrase.value = '';
 }
 
 // A stale async history-password decrypt must never overwrite the form. The
@@ -860,6 +906,7 @@ function readProfileFromForm(password: string): Promise<SavedProfile> {
   if (profile.authMethod === 'password') profile.password = password;
   else if (usesKeychain()) profile.keychainId = ui.keychainId.value;
   else profile.privateKey = ui.privateKey.value;
+  if (profile.authMethod === 'publickey') profile.keyPassphrase = ui.keyPassphrase.value;
   return Promise.resolve(profile);
 }
 
@@ -883,9 +930,9 @@ function validateConnection(): string | null {
     if (!ui.keychainId.value) return bilingual('请选择密钥链中的密钥。', 'Select a saved key.');
   } else if (authMethod() === 'publickey') {
     const key = ui.privateKey.value.trim();
-    if (!key) return bilingual('请粘贴或选择未加密的 OpenSSH 私钥。', 'Paste or choose an unencrypted OpenSSH private key.');
+    if (!key) return bilingual('请粘贴或选择 OpenSSH 私钥。', 'Paste or choose an OpenSSH private key.');
     if (new TextEncoder().encode(key).length > MAX_KEY_BYTES) return bilingual('私钥大于 64 KiB。', 'The private key is larger than 64 KiB.');
-    if (!key.includes('BEGIN OPENSSH PRIVATE KEY')) return bilingual('仅支持未加密的 OpenSSH 私钥。', 'Only unencrypted OpenSSH private keys are supported.');
+    if (!key.includes('BEGIN OPENSSH PRIVATE KEY')) return bilingual('仅支持 OpenSSH 私钥。', 'Only OpenSSH private keys are supported.');
   }
   return null;
 }
@@ -940,6 +987,9 @@ async function applyProfile(profile: SavedProfile): Promise<void> {
   if (selectionUnchanged) {
     ui.password.value = credentials.password ?? '';
     ui.privateKey.value = credentials.privateKey ?? '';
+    // 口令必须一并回填：终端页只对服务端发送私钥/密钥链引用，口令单独走 keyPassphrase 字段。
+    // 漏掉这一项时加密私钥能保存也能「连接测试」通过，正式进终端却报「私钥已加密，请提供口令」。
+    ui.keyPassphrase.value = credentials.keyPassphrase ?? '';
   }
   setState(connectionState);
 }
@@ -1038,27 +1088,47 @@ function renderProfiles(): void {
     main.className = 'profile-main';
     main.type = 'button';
     main.dataset.profileId = profile.id;
-    const avatar = document.createElement('span');
-    avatar.className = 'profile-avatar';
-    avatar.textContent = profile.username.slice(0, 2).toUpperCase();
+    // 与首页主机列表保持一致：图标用地区（国旗），并在 user@host:port 上方显示主机名称。
+    const region = document.createElement('span');
+    region.className = 'profile-avatar region';
+    if (profile.location?.countryCode) {
+      region.append(countryFlag(profile.location.countryCode));
+      const place = profile.location.city || profile.location.region || profile.location.country;
+      region.setAttribute('role', 'img');
+      region.setAttribute('aria-label', [place, profile.location.country].filter(Boolean).join(' · '));
+      region.title = [place, profile.location.region, profile.location.ip].filter(Boolean).join(' · ');
+    } else {
+      region.classList.add('unknown');
+      region.textContent = '🌐';
+      region.setAttribute('role', 'img');
+      region.setAttribute('aria-label', bilingual('位置未知', 'Location unknown'));
+      region.title = bilingual('位置未知', 'Location unknown');
+    }
     const copy = document.createElement('span');
     copy.className = 'profile-copy';
-    const title = document.createElement('strong');
     const label = targetLabel(profile.host, profile.port, profile.username);
-    title.textContent = label;
+    const displayName = profile.name?.trim() || label;
+    const name = document.createElement('strong');
+    name.className = 'profile-name';
+    name.textContent = displayName;
+    name.title = displayName;
+    const address = document.createElement('span');
+    address.className = 'profile-address';
+    address.textContent = label;
+    address.title = label;
     const lastConnected = document.createElement('time');
     const connectedAt = new Date(Math.min(profile.updatedAt, Date.now()));
     lastConnected.dateTime = connectedAt.toISOString();
     const formattedTime = new Intl.DateTimeFormat(currentLanguage, { dateStyle: 'medium', timeStyle: 'short' }).format(connectedAt);
     lastConnected.textContent = bilingual(`最后连接：${formattedTime}`, `Last connected: ${formattedTime}`);
-    copy.append(title, lastConnected);
-    main.append(avatar, copy);
+    copy.append(name, address, lastConnected);
+    main.append(region, copy);
 
     const remove = document.createElement('button');
     remove.className = 'profile-delete';
     remove.type = 'button';
     remove.dataset.deleteProfile = profile.id;
-    remove.setAttribute('aria-label', bilingual(`删除 ${label}`, `Delete ${label}`));
+    remove.setAttribute('aria-label', bilingual(`删除 ${displayName}`, `Delete ${displayName}`));
     remove.textContent = '\u00d7';
     card.append(main, remove);
     ui.profileList.append(card);
@@ -1110,12 +1180,62 @@ function toast(message: string, kind: 'info' | 'error' = 'info'): void {
   window.setTimeout(() => item.remove(), 4_500);
 }
 
+/**
+ * Whether the live session belongs to the target currently shown in the form.
+ *
+ * Selecting another entry from the cloud host list only refills the form — the
+ * previous session stays online. Anything keyed off the global link state alone
+ * (notably the connect button) would then offer "disconnect" for the *other*
+ * host's session, so link state and form target must be checked together.
+ */
+function sessionOwnsFormTarget(): boolean {
+  if (connectionState !== 'connecting' && connectionState !== 'connected' && connectionState !== 'disconnecting') return false;
+  return currentTargetKey !== '' && currentTargetKey === targetKey();
+}
+
+/** Wait until a requested disconnect has settled back to idle. */
+function waitForIdle(timeoutMs = 2_000): Promise<void> {
+  return new Promise((resolve) => {
+    if (connectionState === 'idle' || connectionState === 'error') {
+      resolve();
+      return;
+    }
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      if (connectionState === 'idle' || connectionState === 'error' || Date.now() - startedAt >= timeoutMs) {
+        window.clearInterval(timer);
+        resolve();
+      }
+    }, 40);
+  });
+}
+
+/** Paint the connect button for the host currently held by the form. */
+function renderConnectControl(): void {
+  const state: ConnectionState = sessionOwnsFormTarget() ? connectionState : 'idle';
+  const control = resolveConnectionControl(state, historyPasswordLoading);
+  const controlLabel = control.action === 'cancel'
+    ? bilingual('取消连接', 'Cancel connection')
+    : control.action === 'disconnect'
+      ? bilingual('断开', 'Disconnect')
+      : control.action === 'disconnecting'
+        ? bilingual('断开中...', 'Disconnecting...')
+        : bilingual('连接', 'Connect');
+  ui.connect.disabled = control.disabled;
+  ui.connect.classList.toggle('is-danger', control.danger);
+  ui.connect.dataset.action = control.action;
+  ui.connect.querySelector<HTMLElement>('.button-icon')!.textContent = control.danger ? 'x' : '>_';
+  ui.connect.querySelector<HTMLElement>('span:last-child')!.textContent = controlLabel;
+  ui.connect.setAttribute('aria-label', controlLabel);
+  ui.connect.title = currentSessionId || controlLabel;
+}
+
 function updateConnectionStatus(message: LocalizedMessage): void {
   currentSessionSubtitle = message;
   const text = localize(message);
   ui.sessionSubtitle.textContent = text;
   filePage?.setMessage(text);
-  if (connectionState === 'connecting') {
+  if (connectionState === 'connecting' && sessionOwnsFormTarget()) {
     const btnSpan = ui.connect.querySelector<HTMLElement>('span:last-child');
     if (btnSpan) btnSpan.textContent = text;
   }
@@ -1135,21 +1255,7 @@ function setState(state: ConnectionState, label?: string): void {
   ui.liveOrb.className = `live-orb ${state}`;
   ui.liveOrbLabel.textContent = stateLabel;
   ui.liveOrb.title = stateLabel;
-  const control = resolveConnectionControl(state, historyPasswordLoading);
-  const controlLabel = control.action === 'cancel'
-    ? bilingual('取消连接', 'Cancel connection')
-    : control.action === 'disconnect'
-      ? bilingual('断开', 'Disconnect')
-      : control.action === 'disconnecting'
-        ? bilingual('断开中...', 'Disconnecting...')
-        : bilingual('连接', 'Connect');
-  ui.connect.disabled = control.disabled;
-  ui.connect.classList.toggle('is-danger', control.danger);
-  ui.connect.dataset.action = control.action;
-  ui.connect.querySelector<HTMLElement>('.button-icon')!.textContent = control.danger ? 'x' : '>_';
-  ui.connect.querySelector<HTMLElement>('span:last-child')!.textContent = controlLabel;
-  ui.connect.setAttribute('aria-label', controlLabel);
-  ui.connect.title = currentSessionId || controlLabel;
+  renderConnectControl();
   terminalTools?.setConnected(state === 'connected');
 }
 
@@ -1179,7 +1285,10 @@ function fitTerminal(send = true): void {
   resizeFrame = requestAnimationFrame(() => {
     try {
       fitAddon.fit();
-      if (send && socket?.readyState === WebSocket.OPEN) {
+      // 握手完成前不能发 resize：此时服务端还没有会话，任何非 connect 消息都会被判成重复
+      // 连接，进而把正在进行的握手一起掐断。进入终端必然会触发 ResizeObserver（布局变化），
+      // 所以这个时序很容易命中；真实尺寸在 markReady 里补发一次。
+      if (send && connectionState === 'connected' && socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
       }
     } catch {
@@ -1287,6 +1396,8 @@ function markReady(message = bilingual('交互式 Shell 已就绪', 'Interactive
     }, 120);
   }
   if (document.body.dataset.view === 'workspace') terminal.focus();
+  // 补发真实尺寸：握手期间因为布局变化产生的 resize 都被抑制了，这里对齐一次。
+  requestAnimationFrame(() => fitTerminal(true));
 }
 
 function sendHostKeyDecision(accept: boolean): void {
@@ -1619,6 +1730,8 @@ function createSshReconnectFactory(): (attempt: number) => Promise<WebSocket> {
       if (params.authMethod === 'password') config.password = params.password;
       else if (params.keychainId) config.keychainId = params.keychainId;
       else config.privateKey = params.privateKey;
+      // 重连时口令必须一并回传，否则加密私钥会在第二次握手上解不开。
+      if (params.authMethod === 'publickey' && params.keyPassphrase) config.keyPassphrase = params.keyPassphrase;
       if (params.pinnedKey) config.expectedFingerprint = params.pinnedKey;
 
       ws.send(JSON.stringify(config));
@@ -1676,15 +1789,26 @@ function handleSshReconnectLog(entry: ReconnectLogEntry): void {
 }
 
 async function connect(): Promise<void> {
-  if (connectionState === 'connecting' || connectionState === 'connected' || connectionState === 'disconnecting') return;
-  if (socket || authorizationAbort) return;
   if (historyPasswordLoading) return;
+  applyFormDefaults();
+  if (connectionState === 'connecting' || connectionState === 'connected' || connectionState === 'disconnecting') {
+    // Repeat clicks for the host already online stay a no-op (this also keeps
+    // the reconnect manager from dialling twice).
+    if (targetKey() === currentTargetKey) return;
+    // A different target means "switch session": this page carries one session
+    // at a time. Validate before tearing down, so a typo never drops the live
+    // session, then retire it instead of silently doing nothing.
+    if (validateConnectForm()) return;
+    disconnect(bilingual('已切换到新的主机目标', 'Switched to a new host target'));
+    await waitForIdle();
+    if (connectionState === 'connecting' || connectionState === 'connected' || connectionState === 'disconnecting') return;
+  }
+  if (socket || authorizationAbort) return;
   historyPasswordLoadGeneration++;
   historyPasswordLoading = false;
   // Fresh baseline for a new session: the previous run may have left network
   // state (interface list, baselines) if the user navigated away uncleanly.
   resetNetworkMetric();
-  applyFormDefaults();
   const validationError = validateConnectForm();
   if (validationError) {
     showFormError(validationError);
@@ -1731,6 +1855,7 @@ async function connect(): Promise<void> {
     const privateKey = ui.privateKey.value.trim();
     const keychainId = usesKeychain() ? ui.keychainId.value : undefined;
     const method = authMethod();
+    const keyPassphrase = method === 'password' ? '' : ui.keyPassphrase.value;
     const term = ui.termType.value;
     const historyProfile = readProfileFromForm(password);
     // Resolve encryption during the SSH handshake so ready can usually save synchronously.
@@ -1756,6 +1881,7 @@ async function connect(): Promise<void> {
     if (method === 'password') reconnectParams.password = password;
     else if (keychainId) reconnectParams.keychainId = keychainId;
     else reconnectParams.privateKey = privateKey;
+    if (keychainId || privateKey) reconnectParams.keyPassphrase = keyPassphrase;
     if (pinnedKey) reconnectParams.pinnedKey = pinnedKey;
 
     // Set up (or replace) the SSH reconnect manager.
@@ -1787,6 +1913,7 @@ async function connect(): Promise<void> {
       if (method === 'password') config.password = password;
       else if (keychainId) config.keychainId = keychainId;
       else config.privateKey = privateKey;
+      if (method === 'publickey' && keyPassphrase) config.keyPassphrase = keyPassphrase;
       if (pinnedKey) config.expectedFingerprint = pinnedKey;
       activeSocket.send(JSON.stringify(config));
       updateConnectionStatus(localized('正在打开 TCP 连接...', 'Opening TCP connection...'));
@@ -2035,7 +2162,9 @@ for (const radio of ui.form.querySelectorAll<HTMLInputElement>('input[name="auth
 }
 ui.form.addEventListener('submit', (formEvent) => {
   formEvent.preventDefault();
-  if (connectionState === 'connecting' || connectionState === 'connected') {
+  // Disconnect only ever applies to the session that owns the current form
+  // target; with another host selected the button must dial that host instead.
+  if (sessionOwnsFormTarget()) {
     disconnect(connectionState === 'connecting'
       ? bilingual('连接已取消', 'Connection cancelled')
       : bilingual('已由用户断开连接', 'Disconnected by user'));
@@ -2049,7 +2178,11 @@ ui.password.addEventListener('input', () => {
   passwordDirty = true;
 });
 for (const field of [ui.host, ui.port, ui.username]) {
-  field.addEventListener('input', cancelHistoryPasswordLoad);
+  field.addEventListener('input', () => {
+    cancelHistoryPasswordLoad();
+    // Editing the target by hand changes which session the button acts on.
+    renderConnectControl();
+  });
 }
 ui.revealPassword.addEventListener('click', () => {
   const reveal = ui.password.type === 'password';
@@ -2150,6 +2283,7 @@ ui.themeToggle.addEventListener('click', () => {
   const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
   document.documentElement.dataset.theme = next;
   try { localStorage.setItem(THEME_STORAGE_KEY, next); } catch { /* Theme still applies for this page. */ }
+  applyTerminalTheme();
 });
 ui.hostKeyDialog.addEventListener('cancel', (cancelEvent) => {
   cancelEvent.preventDefault();
@@ -2189,6 +2323,7 @@ document.addEventListener('keydown', (keyEvent) => {
 let storedTheme: string | null = null;
 try { storedTheme = localStorage.getItem(THEME_STORAGE_KEY); } catch { /* Storage can be disabled. */ }
 if (storedTheme === 'light' || storedTheme === 'dark') document.documentElement.dataset.theme = storedTheme;
+applyTerminalTheme();
 async function initialize(): Promise<void> {
   applyLanguage(currentLanguage);
   renderProfiles();

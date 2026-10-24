@@ -1,4 +1,4 @@
-import { api, saveHost, removeHost, refreshHostLocation, type CloudHost, type HostInput } from './cloud-api';
+import { api, saveHost, removeHost, refreshHostLocation, hostCredentials, type CloudHost, type HostInput } from './cloud-api';
 import type { HostGlobe } from './globe';
 import type { FilePage } from './file-page';
 import type { Snippets } from './snippets';
@@ -7,6 +7,7 @@ import { createElement, KeyRound } from 'lucide';
 import { Keychain, fillKeychainSelect } from './keychain';
 import { countryFlag } from './flags';
 import { systemIcon } from './os-icons';
+import { testConnection } from './connection-test';
 import './dashboard.css';
 
 interface DashboardActions {
@@ -102,9 +103,10 @@ export class Dashboard {
             <label>端口<input name="port" type="number" min="1" max="65535" value="22" required></label>
             <label class="wide">认证方式<select name="authMethod"><option value="password">密码</option><option value="publickey">上传 / 填写私钥</option><option value="keychain">密钥链</option></select></label>
             <label class="wide" id="cloud-password-field">密码<input name="password" type="password" maxlength="4096" autocomplete="new-password"><small class="credential-help">密码会由 Worker 加密后保存。</small></label>
-            <label class="wide" id="cloud-key-field" hidden>私钥<textarea name="privateKey" rows="5" maxlength="65536" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" spellcheck="false"></textarea><small class="credential-help">仅支持未加密的 OpenSSH 私钥。</small></label>
+            <label class="wide" id="cloud-key-field" hidden>私钥<textarea name="privateKey" rows="5" maxlength="65536" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" spellcheck="false"></textarea><small class="credential-help">OpenSSH 新格式私钥；若设了口令，请在下方填写。</small></label>
             <label class="wide" id="cloud-key-file-field" hidden>私钥文件<input name="privateKeyFile" type="file" accept=".pem,.key,.openssh,text/plain"></label>
             <label class="wide" id="cloud-keychain-field" hidden>已有密钥<select name="keychainId"><option value="">选择密钥</option></select></label>
+            <label class="wide" id="cloud-key-passphrase-field" hidden>私钥口令<input name="keyPassphrase" type="password" maxlength="1024" autocomplete="off"><small class="credential-help">私钥带口令时填写，与凭据一起加密保存；未加密则留空。</small></label>
           </div>
           <details class="host-advanced"><summary>高级设置</summary><div class="host-form-grid">
             <label class="wide">主机指纹<input name="fingerprint" placeholder="SHA256:…，首次连接时确认" maxlength="128"></label>
@@ -114,7 +116,7 @@ export class Dashboard {
           </div></details>
           <p class="host-form-disclosure">首次保存会将解析后的公网 IP 发给 IPWho 服务查询城市，不发送密码或私钥。</p>
           <p id="host-form-error" class="host-form-error" role="alert" hidden></p>
-          <div class="dialog-actions"><button class="home-button close-dialog" type="button">取消</button><button class="home-button primary" id="save-cloud-host" type="submit">加密保存</button></div>
+          <div class="dialog-actions"><button class="home-button close-dialog" type="button">取消</button><button class="home-button" id="test-cloud-host" type="button">测试连接</button><button class="home-button primary" id="save-cloud-host" type="submit">加密保存</button></div>
         </form>
       </dialog>`;
     document.body.prepend(this.root);
@@ -171,6 +173,7 @@ export class Dashboard {
         this.get('#host-form-error').textContent = error instanceof Error ? error.message : '私钥读取失败。'; this.get('#host-form-error').hidden = false;
       }
     });
+    this.get('#test-cloud-host').addEventListener('click', () => void this.test());
     this.form.addEventListener('submit', (event) => { event.preventDefault(); void this.save(); });
     this.get('#pause-globe').addEventListener('click', () => {
       this.paused = !this.paused;
@@ -479,8 +482,64 @@ export class Dashboard {
     this.get('#cloud-key-file-field').hidden = method !== 'publickey';
     this.field('privateKeyFile').disabled = method !== 'publickey';
     this.get('#cloud-keychain-field').hidden = method !== 'keychain';
+    // 「上传私钥」与「密钥链」两种公钥方式都要能填口令
+    this.get('#cloud-key-passphrase-field').hidden = method !== 'publickey' && method !== 'keychain';
     this.field('keychainId').required = method === 'keychain';
     if (method === 'keychain') void this.actions.keychain.load();
+  }
+
+  private showFormResult(message: string, ok: boolean): void {
+    const node = this.get('#host-form-error');
+    node.textContent = message;
+    node.classList.toggle('is-success', ok);
+    node.hidden = false;
+  }
+
+  private async test(): Promise<void> {
+    if (this.busy || !this.form.reportValidity()) return;
+    const value = (name: string) => this.field(name).value;
+    const selection = value('authMethod');
+    const method: 'password' | 'publickey' = selection === 'password' ? 'password' : 'publickey';
+    let password = method === 'password' ? value('password') : '';
+    let privateKey = selection === 'publickey' ? value('privateKey').trim() : '';
+    const keychainId = selection === 'keychain' ? value('keychainId') : '';
+    let keyPassphrase = method === 'publickey' ? value('keyPassphrase') : '';
+
+    this.busy = true;
+    const testButton = this.get<HTMLButtonElement>('#test-cloud-host');
+    const saveButton = this.get<HTMLButtonElement>('#save-cloud-host');
+    testButton.disabled = true; saveButton.disabled = true;
+    testButton.textContent = '测试中…';
+    this.get('#host-form-error').hidden = true;
+    try {
+      // 编辑既有主机时凭据可以留空以沿用原凭据，这里取回已保存凭据做真实探测，
+      // 保证测试与后续保存使用同一份凭据。
+      const keepCredential = this.editing?.authMethod === method && (selection === 'password'
+        ? !password
+        : selection === 'keychain' ? keychainId === this.editing.keychainId : !privateKey && !this.editing.keychainId);
+      if (this.editing && keepCredential) {
+        const saved = await hostCredentials(this.editing.id);
+        if (selection === 'password') password = saved.password ?? '';
+        else {
+          if (selection === 'publickey') privateKey = saved.privateKey ?? '';
+          keyPassphrase = keyPassphrase || saved.keyPassphrase || '';
+        }
+      }
+      const result = await testConnection({
+        host: value('host').trim(), port: Number(value('port')), username: value('username').trim(),
+        authMethod: method, fingerprint: value('fingerprint').trim(),
+        ...(method === 'password' ? { password } : keychainId ? { keychainId } : { privateKey }),
+        ...(method === 'publickey' && keyPassphrase ? { keyPassphrase } : {}),
+      });
+      const detail = result.ok && result.fingerprint ? `（服务器指纹 ${result.fingerprint}）` : '';
+      this.showFormResult(`${result.message}${detail}`, result.ok);
+    } catch (error) {
+      this.showFormResult(error instanceof Error ? error.message : '测试失败。', false);
+    } finally {
+      this.busy = false;
+      testButton.disabled = false; saveButton.disabled = false;
+      testButton.textContent = '测试连接';
+    }
   }
 
   private async save(): Promise<void> {
@@ -497,6 +556,11 @@ export class Dashboard {
     else {
       const credential = input.authMethod === 'password' ? 'password' : 'privateKey';
       if (value(credential) || !this.editing || this.editing.authMethod !== input.authMethod || this.editing.keychainId) input[credential] = value(credential);
+    }
+    // 私钥口令留空表示沿用旧值；但若本次换了新私钥，留空就是「新私钥无口令」。
+    if (input.authMethod === 'publickey') {
+      const passphrase = value('keyPassphrase');
+      if (passphrase || input.privateKey !== undefined) input.keyPassphrase = passphrase;
     }
     try {
       await saveHost(input, this.editing?.id);
