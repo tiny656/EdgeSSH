@@ -53,6 +53,21 @@
 
 ---
 
+## CLI / Agent 调用
+
+本地 Agent 可以通过 CLI 使用现有主机、SSH 和文件功能，使用 Cloudflare Access 浏览器登录并复用令牌。需要先部署本次代码并安装 Node.js 22.12+ 与 cloudflared。
+
+```sh
+npm --prefix cli ci
+npm install --global ./cli
+edgessh login --url https://ssh.example.com
+edgessh hosts
+edgessh exec "主机名" --json -- 'uname -a'
+edgessh get "主机名" /var/log/app.log ./app.log
+```
+
+支持交互终端、目录查看、上传下载、创建目录、重命名和删除。命令执行与文件操作按需连接，完成即断开，设有超时和输出上限。安装、指纹确认、Agent 用法和资源消耗说明见 [CLI 文档](cli/README.md)。
+
 ## 为什么是 EdgeSSH？
 
 SSH 客户端不少，WebSSH 也算不上新鲜。
@@ -193,7 +208,16 @@ EdgeSSH 内置了一个基于 SFTP 的文件管理器：
 - 删除文件
 - 键盘导航
 - 文件类型图标
+- 在线编辑文本文件（代码高亮、Markdown 预览、自动保存）
 - 从文件管理器直接跳回 SSH Terminal
+
+选中 js/ts/css/html/json/md 等文本文件即可在弹窗里编辑：CodeMirror 6 与语言包按需加载，Markdown 预览依赖仅在预览时加载。
+小文件停止输入 3 秒后自动保存，自动写入至少间隔 10 秒；达到 128K 字符时改为 15 秒防抖、30 秒最小间隔。
+Ctrl/Cmd+S 和关闭前的保存不受此间隔限制。保存仍传输整个文件，但不会为每次自动保存重新读取整个目录。
+文本按扩展名白名单 + 单文件 2 MiB 限制，读取使用现有 SFTP 连接的 64 KiB 二进制分块，超限与二进制文件仍走下载。
+保存前和 rename 前都核对远端 mtime；未能取得新版本时暂停自动保存，不会静默跳过检查后覆盖。
+mtime 仅为秒级尽力检测，并非文件锁或原子比较写入，请避免多人同时编辑同一文件。
+文件管理器按主机记住上次目录（只存在浏览器本地）。
 
 Terminal 与 File Manager 共用同一个 SSH 会话，切换之间不必重新连接。
 

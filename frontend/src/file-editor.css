@@ -1,0 +1,306 @@
+/* 在线编辑器：覆盖整个文件面板，暗色配色与终端主题一致。 */
+.file-manager {
+  position: relative;
+}
+
+.file-editor {
+  position: absolute;
+  inset: 0;
+  z-index: 24;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  /* 固定深色描边：文件页把 --border 重映射成浅色，用变量会和终端 dock 里的编辑器不一致。 */
+  border: 1px solid #253341;
+  background: #0d1219;
+  color: #e9f0f3;
+  font-family: var(--sans);
+}
+
+/* 全屏：同一个容器换 class，铺满视口；不重建编辑器。 */
+.file-editor.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  border: 0;
+}
+
+.file-editor-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 4px 8px;
+  border-bottom: 1px solid #253341;
+  background: #0a0f15;
+}
+
+.file-editor-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.file-editor-title {
+  overflow: hidden;
+  color: #e9f0f3;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.file-editor-title::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #36c991;
+  vertical-align: middle;
+}
+
+.file-editor.is-dirty .file-editor-title::before {
+  background: #f0c869;
+}
+
+.file-editor-path {
+  overflow: hidden;
+  min-width: 0;
+  color: #6d7f8c;
+  font-family: var(--mono);
+  font-size: 9px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.file-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.file-editor-state {
+  max-width: 220px;
+  overflow: hidden;
+  color: #8b9aa6;
+  font-size: 9px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.file-editor.is-dirty .file-editor-state {
+  color: #f0c869;
+}
+
+/* 自动保存状态：暂停时必须一眼能看见。 */
+.file-editor-autosave {
+  padding: 1px 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: #8b9aa6;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.file-editor-autosave[data-state="pending"] {
+  color: #8fd3ff;
+}
+
+.file-editor-autosave[data-state="saving"] {
+  color: #69e6b4;
+}
+
+.file-editor-autosave[data-state="paused"] {
+  border-color: rgba(240, 200, 105, 0.55);
+  background: rgba(240, 200, 105, 0.12);
+  color: #f0c869;
+  font-weight: 700;
+}
+
+.file-editor-button {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid #253341;
+  border-radius: 4px;
+  background: #151d26;
+  color: #c8d4db;
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.file-editor-button:hover:not(:disabled) {
+  border-color: #3a4c5c;
+  color: #e9f0f3;
+}
+
+.file-editor-button:focus-visible {
+  outline: 2px solid #69e6b4;
+  outline-offset: 1px;
+}
+
+.file-editor-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.file-editor-button.primary {
+  border-color: color-mix(in srgb, #69e6b4 54%, #253341);
+  background: rgba(105, 230, 180, 0.14);
+  color: #69e6b4;
+}
+
+.file-editor-button.icon {
+  width: 24px;
+  padding: 0;
+  font-size: 12px;
+}
+
+.file-editor-body {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.file-editor-host {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.file-editor-host .cm-editor {
+  height: 100%;
+}
+
+.file-editor-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: auto;
+  padding: 14px 18px 24px;
+  color: #dbe6ea;
+  font-family: var(--sans);
+  font-size: 12px;
+  line-height: 1.65;
+  word-break: break-word;
+}
+
+.file-editor-preview h1,
+.file-editor-preview h2,
+.file-editor-preview h3,
+.file-editor-preview h4 {
+  margin: 1.1em 0 0.45em;
+  color: #e9f0f3;
+  line-height: 1.3;
+}
+
+.file-editor-preview h1 { font-size: 1.5em; }
+.file-editor-preview h2 { font-size: 1.28em; }
+.file-editor-preview h3 { font-size: 1.12em; }
+
+.file-editor-preview p,
+.file-editor-preview ul,
+.file-editor-preview ol,
+.file-editor-preview blockquote,
+.file-editor-preview pre,
+.file-editor-preview table {
+  margin: 0.6em 0;
+}
+
+.file-editor-preview a {
+  color: #69e6b4;
+}
+
+.file-editor-preview code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: #080b10;
+  color: #a5d6a7;
+  font-family: var(--mono);
+  font-size: 0.94em;
+}
+
+.file-editor-preview pre {
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid #253341;
+  border-radius: 5px;
+  background: #080b10;
+}
+
+.file-editor-preview pre code {
+  padding: 0;
+  background: none;
+}
+
+.file-editor-preview blockquote {
+  padding-left: 10px;
+  border-left: 3px solid #253341;
+  color: #9fb3c0;
+}
+
+.file-editor-preview table {
+  border-collapse: collapse;
+}
+
+.file-editor-preview th,
+.file-editor-preview td {
+  padding: 4px 8px;
+  border: 1px solid #253341;
+}
+
+.file-editor-preview img {
+  max-width: 100%;
+  height: auto;
+}
+
+.file-editor-preview hr {
+  border: 0;
+  border-top: 1px solid #253341;
+}
+
+/* 移动端：标题与按钮分组换行，编辑区仍占满剩余高度。 */
+@media (max-width: 640px) {
+  .file-editor-header {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .file-editor-state {
+    max-width: 120px;
+  }
+
+  .file-editor-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .file-editor-autosave {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .file-editor-button {
+    height: 28px;
+  }
+
+  .file-editor-button.icon {
+    width: 28px;
+  }
+
+  .file-editor-preview {
+    padding: 10px 12px 18px;
+  }
+}

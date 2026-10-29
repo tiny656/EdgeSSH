@@ -12,7 +12,7 @@ const entry = (name: string, type = 'file', size = 12) => ({
 });
 
 // 只在测试浏览器内模拟 API/协议，不访问真实主机、不增加生产认证绕过。
-export async function fileFixture(page: Page, options: { firstSeen?: boolean; credentialError?: boolean; noHosts?: boolean; holdUpload?: boolean; waitUntil?: 'load' | 'domcontentloaded' } = {}) {
+export async function fileFixture(page: Page, options: { firstSeen?: boolean; credentialError?: boolean; noHosts?: boolean; holdUpload?: boolean; omitUploadMtime?: boolean; saveError?: boolean; readError?: boolean; waitUntil?: 'load' | 'domcontentloaded' } = {}) {
   const hosts = options.noHosts ? [] : [host('alpha', 'Tokyo production', '192.0.2.10'), host('beta', 'Singapore backup', '192.0.2.20')];
   const directories = new Map([
     ['/', [entry('root', 'directory')]],
@@ -24,6 +24,11 @@ export async function fileFixture(page: Page, options: { firstSeen?: boolean; cr
   const sshSockets: WebSocketRoute[] = [];
   const sftpSockets: WebSocketRoute[] = [];
   const uploaded: Buffer[] = [];
+  // 在线编辑器读取/保存的远端文本文件；mtime 用于冲突校验，测试可直接改它模拟他人修改。
+  const textFiles = new Map([
+    ['/root/README.md', { content: '# Edge SSH\n\n<script>window.__xss = 1</script>\n\n[bad](javascript:alert(1))\n', mtime: 1_790_100_000 }],
+    ['/root/nginx.conf', { content: 'server {\n  listen 80;\n}\n', mtime: 1_790_100_000 }],
+  ]);
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/auth/me') return route.fulfill({ json: { account: { username: 'Administrator' }, provider: 'cloudflare' } });
@@ -87,13 +92,43 @@ export async function fileFixture(page: Page, options: { firstSeen?: boolean; cr
         directories.set(parent(path), directories.get(parent(path))!.filter((item) => item.name !== name(path)));
       }
       if (['sftp_mkdir', 'sftp_rename', 'sftp_delete', 'sftp_rmdir'].includes(type)) send({ type: `${type}_result`, requestId });
+      if (type === 'sftp_read_text') {
+        const file = textFiles.get(path);
+        if (!file) send({ type: 'sftp_error', requestId, operation: 'read', message: 'No such file' });
+        else {
+          const bytes = Buffer.from(file.content);
+          send({ type: 'sftp_read_text_start', requestId, path });
+          for (let offset = 0; offset < bytes.length; offset += 64 * 1024) ws.send(bytes.subarray(offset, offset + 64 * 1024));
+          if (options.readError) { send({ type: 'sftp_error', requestId, operation: 'read', message: 'Read interrupted' }); return; }
+          send({ type: 'sftp_read_text_result', requestId, path, size: bytes.length, mtime: file.mtime });
+        }
+      }
       if (type === 'sftp_upload_start') {
+        if (options.saveError) { send({ type: 'sftp_error', requestId, operation: 'upload', message: 'Permission denied' }); return; }
+        const target = textFiles.get(path);
+        if (typeof message.expectedMtime === 'number' && (!target || target.mtime !== message.expectedMtime)) {
+          send({ type: 'sftp_error', requestId, operation: 'upload', conflict: true, message: 'The remote file changed since it was opened' });
+          return;
+        }
         upload = message;
+        uploaded.length = 0;
         if (!options.holdUpload) send({ type: 'sftp_upload_ready', requestId });
       }
       if (type === 'sftp_upload_end') {
-        directories.get(parent(upload!.path))!.push(entry(name(upload!.path), 'file', upload!.size));
-        send({ type: 'sftp_upload_complete', requestId });
+        const list = directories.get(parent(upload!.path))!;
+        const existing = list.find((item) => item.name === name(upload!.path));
+        if (existing) existing.size = upload!.size;
+        else list.push(entry(name(upload!.path), 'file', upload!.size));
+        const target = textFiles.get(upload!.path);
+        if (target) {
+          target.content = Buffer.concat(uploaded).toString('utf8');
+          target.mtime += 1;
+        }
+        // omitUploadMtime 模拟后端 finishUpload 的 stat 失败：结果里没有 mtime。
+        send({
+          type: 'sftp_upload_complete', requestId, size: upload!.size,
+          ...(options.omitUploadMtime ? {} : { mtime: target?.mtime }),
+        });
       }
       if (type === 'sftp_download') {
         const data = Buffer.from('hello files\n');
@@ -105,7 +140,7 @@ export async function fileFixture(page: Page, options: { firstSeen?: boolean; cr
   });
   await page.goto('/', { waitUntil: options.waitUntil ?? 'load' });
   await page.locator('#rail-files').click();
-  return { hosts, calls, sshSockets, sftpSockets, uploaded, directories };
+  return { hosts, calls, sshSockets, sftpSockets, uploaded, directories, textFiles };
 }
 
 export async function connectFiles(page: Page, id = 'alpha') {

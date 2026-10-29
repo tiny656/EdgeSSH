@@ -3,11 +3,13 @@ import {
   SFTPClient,
   SFTPStatusError,
   SFTP_OPEN_FLAGS,
+  SFTP_STATUS,
   getSFTPFileKind,
   formatSFTPPermissions,
   type SFTPAttrs,
   type SFTPDirEntry,
 } from '../ssh/sftp';
+import { TextFileError, assertTextFileSize, TextFileDecoder } from './text-file';
 
 const MAX_PATH_BYTES = 4096;
 const MAX_DIRECTORY_ENTRIES = 2000;
@@ -29,11 +31,20 @@ interface UploadState {
   handle: Uint8Array;
   handleClosed: boolean;
   temporary: boolean;
+  expectedMtime?: number | null;
 }
 
 interface DownloadState {
   requestId: string;
   cancelled: boolean;
+}
+
+/** 打开时的远端 mtime 已变；拒绝写入，由前端提示用户决定是否覆盖。 */
+export class SFTPConflictError extends Error {
+  constructor(message = 'The remote file changed since it was opened') {
+    super(message);
+    this.name = 'SFTPConflictError';
+  }
 }
 
 export class SFTPHandler {
@@ -184,16 +195,63 @@ export class SFTPHandler {
     if (this.activeDownload?.requestId === requestId) this.activeDownload.cancelled = true;
   }
 
-  async startUpload(requestId: string, path: string, size: number, overwrite: boolean): Promise<void> {
+  /** Stream editor text over the existing binary SFTP socket, with bounded validation. */
+  async readText(requestId: string, path: string): Promise<void> {
+    let handle: Uint8Array | null = null;
+    const download: DownloadState = { requestId, cancelled: false };
+    try {
+      this.assertReady();
+      this.validatePath(path);
+      if (this.activeDownload) throw new Error('Another download is already in progress');
+      this.activeDownload = download;
+      const attrs = await this.client.stat(path);
+      const size = this.safeSize(attrs);
+      assertTextFileSize(size);
+      handle = await this.client.openFile(path, SFTP_OPEN_FLAGS.READ);
+      this.assertDownloadActive(download);
+      this.sendJSON({ type: 'sftp_read_text_start', requestId, path });
+      const decoder = new TextFileDecoder();
+      let offset = 0;
+      while (size === null || offset < size) {
+        this.assertDownloadActive(download);
+        const length = size === null ? TRANSFER_CHUNK_SIZE : Math.min(TRANSFER_CHUNK_SIZE, size - offset);
+        const chunk = await this.client.readFile(handle, offset, length);
+        this.assertDownloadActive(download);
+        if (chunk === null || chunk.length === 0) break;
+        decoder.push(chunk);
+        this.sendBinary(chunk);
+        offset += chunk.length;
+      }
+      decoder.finish();
+      if (size !== null && offset !== size) throw new Error('File changed or was truncated while reading');
+      this.sendJSON({ type: 'sftp_read_text_result', requestId, path, size: offset, mtime: attrs.mtime ?? null });
+    } catch (error) {
+      this.reportError('read', error, requestId);
+    } finally {
+      if (handle) await this.client.closeHandle(handle).catch(() => undefined);
+      if (this.activeDownload === download) this.activeDownload = null;
+    }
+  }
+
+  async startUpload(
+    requestId: string,
+    path: string,
+    size: number,
+    overwrite: boolean,
+    expectedMtime?: number | null,
+  ): Promise<void> {
     try {
       this.assertReady();
       this.validatePath(path);
       if (this.upload) throw new Error('Another upload is already in progress');
       if (!Number.isSafeInteger(size) || size < 0 || size > MAX_FILE_SIZE) throw new Error('Invalid upload size or file exceeds the 64 MiB transfer limit');
+      const permissions = overwrite ? await this.destinationPermissions(path, expectedMtime) : undefined;
       const uploadPath = overwrite ? this.temporaryUploadPath(path) : path;
+      // 覆盖写：临时文件直接按原文件权限位创建，rename 后权限与创建前一致。
       const handle = await this.client.openFile(
         uploadPath,
         SFTP_OPEN_FLAGS.WRITE | SFTP_OPEN_FLAGS.CREATE | SFTP_OPEN_FLAGS.TRUNCATE | SFTP_OPEN_FLAGS.EXCLUSIVE,
+        permissions === undefined ? undefined : { permissions },
       );
       this.upload = {
         requestId,
@@ -204,6 +262,7 @@ export class SFTPHandler {
         handle,
         handleClosed: false,
         temporary: overwrite,
+        expectedMtime,
       };
       this.sendJSON({ type: 'sftp_upload_ready', requestId, path, size });
     } catch (error) {
@@ -238,9 +297,22 @@ export class SFTPHandler {
       if (upload.received !== upload.size) throw new Error('Upload ended before the declared size was received');
       await this.client.closeHandle(upload.handle);
       upload.handleClosed = true;
-      if (upload.temporary) await this.client.rename(upload.uploadPath, upload.destinationPath);
+      if (upload.temporary) {
+        if (upload.expectedMtime !== undefined && upload.expectedMtime !== null) {
+          await this.destinationPermissions(upload.destinationPath, upload.expectedMtime);
+        }
+        await this.client.rename(upload.uploadPath, upload.destinationPath, true);
+      }
       this.upload = null;
-      this.sendJSON({ type: 'sftp_upload_complete', requestId, path: upload.destinationPath, size: upload.received });
+      let mtime: number | undefined;
+      try {
+        const attrs: SFTPAttrs = upload.expectedMtime === undefined ? { flags: 0 } : await this.client.stat(upload.destinationPath);
+        if (typeof attrs.mtime === 'number') mtime = attrs.mtime;
+      } catch { /* An unknown version pauses editor autosave until the user confirms. */ }
+      this.sendJSON({
+        type: 'sftp_upload_complete', requestId, path: upload.destinationPath, size: upload.received,
+        ...(mtime === undefined ? {} : { mtime }),
+      });
     } catch (error) {
       if (upload) await this.abortUpload(upload, true);
       this.reportError('upload', error, requestId);
@@ -353,6 +425,28 @@ export class SFTPHandler {
     if (this.activeDownload !== download || download.cancelled) throw new Error('Download cancelled');
   }
 
+  /**
+   * 覆盖写前读取目标权限位；带 expectedMtime 时同时做并发冲突校验，
+   * 不一致直接抛 SFTPConflictError（只在控制消息里回报，不创建任何文件）。
+   */
+  private async destinationPermissions(path: string, expectedMtime?: number | null): Promise<number | undefined> {
+    const checkMtime = expectedMtime !== undefined && expectedMtime !== null;
+    let attrs: SFTPAttrs;
+    try {
+      attrs = await this.client.stat(path);
+    } catch (error) {
+      if (!checkMtime) return undefined;
+      if (error instanceof SFTPStatusError && error.code === SFTP_STATUS.NO_SUCH_FILE) {
+        throw new SFTPConflictError('The remote file was removed since it was opened');
+      }
+      throw error;
+    }
+    if (checkMtime && attrs.mtime !== expectedMtime) {
+      throw new SFTPConflictError();
+    }
+    return attrs.permissions === undefined ? undefined : attrs.permissions & 0o7777;
+  }
+
   private temporaryUploadPath(path: string): string {
     const separator = path.lastIndexOf('/');
     const parent = separator >= 0 ? path.slice(0, separator + 1) : '';
@@ -391,6 +485,8 @@ export class SFTPHandler {
   private reportError(operation: string, error: unknown, requestId?: string): void {
     const message = error instanceof Error ? error.message : String(error);
     const code = error instanceof SFTPStatusError ? error.code : undefined;
-    this.sendJSON({ type: 'sftp_error', requestId, operation, code, message });
+    const reason = error instanceof TextFileError ? error.reason : undefined;
+    const conflict = error instanceof SFTPConflictError ? true : undefined;
+    this.sendJSON({ type: 'sftp_error', requestId, operation, code, reason, conflict, message });
   }
 }

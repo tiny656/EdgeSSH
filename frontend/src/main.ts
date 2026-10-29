@@ -1244,7 +1244,10 @@ function updateConnectionStatus(message: LocalizedMessage): void {
 function setState(state: ConnectionState, label?: string): void {
   connectionState = state;
   ui.fullscreenFiles.disabled = state !== 'connected';
-  filePage?.setConnection(state, profiles.find((profile) => passwordContext(profile) === currentTargetKey)?.id, currentTargetLabel);
+  const hostId = profiles.find((profile) => passwordContext(profile) === currentTargetKey)?.id ?? null;
+  filePage?.setConnection(state, hostId ?? undefined, currentTargetLabel);
+  // 文件管理按主机 id 记住最后访问的目录；临时连接（无 id）不记录。
+  fileManager?.setHostId(hostId);
   const stateLabel = label ?? ({
     idle: bilingual('离线', 'Offline'),
     connecting: bilingual('连接中', 'Connecting'),
@@ -1799,7 +1802,7 @@ async function connect(): Promise<void> {
     // at a time. Validate before tearing down, so a typo never drops the live
     // session, then retire it instead of silently doing nothing.
     if (validateConnectForm()) return;
-    disconnect(bilingual('已切换到新的主机目标', 'Switched to a new host target'));
+    if (!(await disconnect(bilingual('已切换到新的主机目标', 'Switched to a new host target')))) return;
     await waitForIdle();
     if (connectionState === 'connecting' || connectionState === 'connected' || connectionState === 'disconnecting') return;
   }
@@ -1992,8 +1995,14 @@ async function connect(): Promise<void> {
   }
 }
 
-function disconnect(reason = bilingual('已由用户断开连接', 'Disconnected by user')): void {
-  if (connectionState === 'disconnecting') return;
+async function disconnect(reason = bilingual('已由用户断开连接', 'Disconnected by user'), force = false): Promise<boolean> {
+  if (connectionState === 'disconnecting') return false;
+  // 编辑器里的未保存改动先自动保存；保存失败则阻止断开，避免静默丢字。
+  const requestedGeneration = connectGeneration;
+  if (!force && !(await fileManager.prepareDisconnect())) return false;
+  if (requestedGeneration !== connectGeneration) return false;
+  // prepareDisconnect 期间连接状态可能已经变化，再确认一次。
+  if ((connectionState as ConnectionState) === 'disconnecting') return false;
   const generation = ++connectGeneration;
   setState('disconnecting');
   currentSessionId = '';
@@ -2029,6 +2038,7 @@ function disconnect(reason = bilingual('已由用户断开连接', 'Disconnected
   } else {
     window.setTimeout(finish, 180);
   }
+  return true;
 }
 
 function createDecoder(encoding: string): TextDecoder {
@@ -2165,7 +2175,7 @@ ui.form.addEventListener('submit', (formEvent) => {
   // Disconnect only ever applies to the session that owns the current form
   // target; with another host selected the button must dial that host instead.
   if (sessionOwnsFormTarget()) {
-    disconnect(connectionState === 'connecting'
+    void disconnect(connectionState === 'connecting'
       ? bilingual('连接已取消', 'Connection cancelled')
       : bilingual('已由用户断开连接', 'Disconnected by user'));
   } else if (connectionState !== 'disconnecting') {
@@ -2304,7 +2314,14 @@ ui.resourceNetworkSelect.addEventListener('change', () => {
 });
 terminal.onData((data) => terminalTools?.handleTerminalData(data));
 new ResizeObserver(() => fitTerminal(true)).observe(ui.terminalStage);
-window.addEventListener('beforeunload', () => {
+window.addEventListener('beforeunload', (event) => {
+  // 3 秒防抖窗口里的输入还在编辑器内存中，卸载时同步保存不可行：交给浏览器原生提示。
+  if (fileManager.hasUnsavedEditorChanges()) {
+    event.preventDefault();
+    event.returnValue = '';
+    // 用户可能选择留在本页；此时不能 reset，否则编辑器被销毁、改动照样丢。
+    return;
+  }
   fileManager.reset();
   fileTree?.setReady(false);
   fileTree?.destroy();
@@ -2347,7 +2364,7 @@ async function initialize(): Promise<void> {
       // 返回总览会作废凭据读取；即使用户立刻回到文件页，也不能启动已经取消的连接。
       if (selectionGeneration === historyPasswordLoadGeneration && document.body.dataset.view === 'files') await connect();
     },
-    disconnect: () => disconnect(),
+    disconnect: async () => { await disconnect(); },
     openTerminal: () => {
       dashboard?.openWorkspace();
       if (connectionState === 'idle' || connectionState === 'error') setPanelOpen(true);
@@ -2385,9 +2402,10 @@ async function initialize(): Promise<void> {
       setPanelOpen(true);
       requestAnimationFrame(() => { fitTerminal(false); ui.host.focus(); });
     },
-    leaveWorkspace: () => {
-      disconnect(bilingual('已返回主机总览', 'Returned to host dashboard'));
+    leaveWorkspace: async (force = false) => {
+      if (!(await disconnect(bilingual('已返回主机总览', 'Returned to host dashboard'), force))) return false;
       clearCredentials();
+      return true;
     },
   });
   await dashboard.start();
