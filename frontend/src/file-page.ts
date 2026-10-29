@@ -7,7 +7,8 @@ export type FileConnectionState = 'idle' | 'connecting' | 'connected' | 'disconn
 
 interface FilePageActions {
   connect(host: CloudHost): Promise<void>;
-  disconnect(): void;
+  /** 断开前会先自动保存编辑器内容；失败时 Promise 不会抛错，只是连接保持。 */
+  disconnect(): void | Promise<void>;
   openTerminal(): void;
 }
 
@@ -176,7 +177,7 @@ export class FilePage {
   private async toggleConnection(): Promise<void> {
     if (this.state === 'connecting' || this.state === 'connected') {
       if (!this.confirmLeave()) return;
-      this.actions.disconnect();
+      await this.actions.disconnect();
       return;
     }
     const host = this.hosts.find((item) => item.id === this.select.value);
@@ -190,7 +191,7 @@ export class FilePage {
   }
 
   confirmLeave(): boolean {
-    // 只有正在传输时才打断导航，避免用户无意中取消上传或下载。
+    // 编辑器的未保存内容由断开流程统一自动保存，这里只打断正在进行的传输。
     const progress = this.panel.querySelector<HTMLElement>('#file-manager-progress')!;
     return progress.hidden || confirm('文件正在传输，离开或断开连接将取消传输。仍要继续吗？');
   }
