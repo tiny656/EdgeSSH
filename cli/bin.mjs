@@ -14,7 +14,7 @@ const help = `EdgeSSH CLI — Node.js >=22.12 and cloudflared required
   edgessh connect <host>                     Interactive terminal (Ctrl+] exits)
   edgessh ls <host> [path]                    List remote directory
   edgessh get <host> <remote> <local>         Download file (64 MiB maximum)
-  edgessh put <host> <local> <remote>         Upload file (64 MiB maximum)
+  edgessh put <host> <local> <remote>         Upload file (2 GiB maximum)
   edgessh mkdir <host> <path>                 Create directory
   edgessh rm <host> <path>                    Remove file
   edgessh rmdir <host> <path>                 Remove empty directory
@@ -22,7 +22,8 @@ const help = `EdgeSSH CLI — Node.js >=22.12 and cloudflared required
 
 Host: exact ID or unique name. Options:
   --json                   Exec: one JSON object with stdout/stderr/exitCode
-  --timeout <seconds>      Lifetime including connection, 1..600 (exec:60, others:600)
+  --timeout <seconds>      Lifetime including connection (exec:60, get/put:21600, others:600)
+                          get/put allow 1..86400; other commands allow 1..600
   --max-output <bytes>     Exec output limit, default 1048576, max 16777216
   --fingerprint <SHA256:…> Verify a known fingerprint
   --accept-new             Explicitly trust and pin a first-seen host key
@@ -49,9 +50,11 @@ try {
   else {
     const arity = { login: [0, 0], logout: [0, 0], status: [0, 0], hosts: [0, 0], exec: [2, 2], connect: [1, 1], ls: [1, 2], get: [3, 3], put: [3, 3], mkdir: [2, 2], rm: [2, 2], rmdir: [2, 2], mv: [3, 3] }[command];
     if (!arity || args.length < arity[0] || args.length > arity[1]) throw new Error('Invalid command or arguments. Run edgessh --help');
-    options.timeout = Number(options.timeout ?? (command === 'exec' ? 60 : 600));
+    const fileTransfer = command === 'get' || command === 'put';
+    const maxTimeout = fileTransfer ? 86_400 : 600;
+    options.timeout = Number(options.timeout ?? (command === 'exec' ? 60 : fileTransfer ? 21_600 : 600));
     options['max-output'] = Number(options['max-output'] ?? 1024 * 1024);
-    if (!Number.isInteger(options.timeout) || options.timeout < 1 || options.timeout > 600) throw new Error('--timeout must be 1..600 seconds');
+    if (!Number.isInteger(options.timeout) || options.timeout < 1 || options.timeout > maxTimeout) throw new Error(`--timeout must be 1..${maxTimeout} seconds`);
     if (!Number.isInteger(options['max-output']) || options['max-output'] < 1 || options['max-output'] > 16 * 1024 * 1024) throw new Error('--max-output must be 1..16777216 bytes');
     if (options.fingerprint && !/^SHA256:[A-Za-z0-9+/]{43}$/.test(options.fingerprint)) throw new Error('Invalid SHA256 fingerprint');
     const config = await loadConfig();

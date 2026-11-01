@@ -3,8 +3,9 @@ import type { HostGlobe } from './globe';
 import type { FilePage } from './file-page';
 import type { Snippets } from './snippets';
 import { ForwardPage } from './forward-page';
-import { createElement, KeyRound } from 'lucide';
+import { createElement, KeyRound, Bot } from 'lucide';
 import { Keychain, fillKeychainSelect } from './keychain';
+import { AgentCliPage } from './agent-cli-page';
 import { countryFlag } from './flags';
 import { systemIcon } from './os-icons';
 import { testConnection } from './connection-test';
@@ -47,6 +48,7 @@ export class Dashboard {
   private readonly dialog: HTMLDialogElement;
   private readonly form: HTMLFormElement;
   private readonly forwarding = new ForwardPage();
+  private readonly agentCli = new AgentCliPage();
 
   constructor(private readonly actions: DashboardActions) {
     this.root.id = 'dashboard';
@@ -60,11 +62,11 @@ export class Dashboard {
       <div class="home-layout">
         <nav class="home-rail" aria-label="主导航">
           <button class="rail-item selected" id="rail-overview" aria-current="page">${icon('home')}<span>总览</span></button>
-          <button class="rail-item" id="rail-hosts">${icon('server')}<span>主机</span></button>
           <button class="rail-item" id="rail-files">${icon('folder')}<span>文件管理</span></button>
           <button class="rail-item" id="rail-snippets">${icon('snippets')}<span>代码片段</span></button>
           <button class="rail-item" id="rail-keychain"><span>密钥链</span></button>
           <button class="rail-item" id="rail-forward">${icon('forward')}<span>端口转发</span></button>
+          <button class="rail-item" id="rail-agent-cli"><span>Agent CLI</span></button>
           <button class="rail-item" id="quick-connect">${icon('terminal')}<span>快速连接</span></button>
           <span class="rail-security" title="管理员身份认证">${icon('shield')}<span id="auth-provider-label">身份<br>保护</span></span>
         </nav>
@@ -124,7 +126,9 @@ export class Dashboard {
     this.get('.home-layout').append(this.actions.snippets.page);
     this.get('.home-layout').append(this.forwarding.root);
     this.get('.home-layout').append(this.actions.keychain.root);
+    this.get('.home-layout').append(this.agentCli.root);
     this.get('#rail-keychain').prepend(createElement(KeyRound));
+    this.get('#rail-agent-cli').prepend(createElement(Bot));
     this.actions.keychain.addEventListener('change', () => fillKeychainSelect(this.field('keychainId') as HTMLSelectElement, this.actions.keychain.keys));
     this.dialog = this.get<HTMLDialogElement>('#host-editor-dialog');
     this.form = this.get<HTMLFormElement>('#cloud-host-form');
@@ -143,16 +147,16 @@ export class Dashboard {
     this.dialog.addEventListener('close', () => { this.form.reset(); this.editing = undefined; this.returnFocus?.focus(); });
     this.get('#host-search').addEventListener('input', () => this.renderList());
     this.get('#refresh-hosts').addEventListener('click', () => void this.refresh());
-    for (const id of ['#rail-overview', '#rail-hosts']) this.get(id).addEventListener('click', async () => {
+    this.get('#rail-overview').addEventListener('click', async () => {
       if (!this.actions.files.confirmLeave()) return;
       if (!this.isHome && !(await this.actions.leaveWorkspace())) return;
       this.show();
-      if (id === '#rail-hosts') this.get<HTMLInputElement>('#host-search').focus();
     });
     this.get('#rail-files').addEventListener('click', () => this.showFiles());
     this.get('#rail-snippets').addEventListener('click', () => this.showSnippets());
     this.get('#rail-keychain').addEventListener('click', () => this.showKeychain());
     this.get('#rail-forward').addEventListener('click', () => this.showForwarding());
+    this.get('#rail-agent-cli').addEventListener('click', () => this.showAgentCli());
     for (const id of ['#quick-connect', '#bottom-quick']) this.get(id).addEventListener('click', async () => {
       if (this.busy || !this.actions.files.confirmLeave()) return;
       if (!(await this.actions.leaveWorkspace())) return;
@@ -217,6 +221,7 @@ export class Dashboard {
       this.get('#account-label').textContent = account.username;
       this.get('.account-avatar').textContent = account.username.slice(0, 1).toUpperCase();
       this.get('#auth-provider-label').textContent = provider === 'github' ? 'GitHub' : 'Access';
+      this.agentCli.setProvider(provider);
       const action = this.get<HTMLAnchorElement>('#account-action');
       action.textContent = '退出'; action.title = '退出登录'; action.href = '/api/auth/logout';
       await this.refresh();
@@ -252,6 +257,7 @@ export class Dashboard {
   }
 
   show(): void {
+    this.agentCli.hide();
     this.actions.keychain.hide();
     this.forwarding.hide();
     this.actions.files.hide();
@@ -265,6 +271,7 @@ export class Dashboard {
   }
 
   openWorkspace(): void {
+    this.agentCli.hide();
     this.actions.keychain.hide();
     this.forwarding.hide();
     this.actions.files.hide();
@@ -278,6 +285,7 @@ export class Dashboard {
   }
 
   showFiles(): void {
+    this.agentCli.hide();
     this.actions.keychain.hide();
     this.forwarding.hide();
     this.actions.snippets.hide();
@@ -292,6 +300,7 @@ export class Dashboard {
 
   showSnippets(): void {
     if (!this.actions.files.confirmLeave()) return;
+    this.agentCli.hide();
     this.actions.keychain.hide();
     this.forwarding.hide();
     // 仅切换视图，不结束 SSH；在片段页编辑后可回到同一会话。
@@ -307,6 +316,7 @@ export class Dashboard {
 
   showForwarding(): void {
     if (!this.actions.files.confirmLeave()) return;
+    this.agentCli.hide();
     this.actions.keychain.hide();
     this.actions.files.hide();
     this.actions.snippets.hide();
@@ -321,6 +331,7 @@ export class Dashboard {
 
   showKeychain(): void {
     if (!this.actions.files.confirmLeave()) return;
+    this.agentCli.hide();
     this.actions.files.hide(); this.actions.snippets.hide(); this.forwarding.hide();
     this.isHome = false; this.root.hidden = false;
     this.get('.home-content').hidden = true;
@@ -328,6 +339,17 @@ export class Dashboard {
     document.body.dataset.view = 'keychain'; this.selectNavigation('rail-keychain');
     this.get('#rail-keychain').scrollIntoView({ block: 'nearest', inline: 'nearest' });
     this.globe?.setActive(false); this.actions.keychain.show();
+  }
+
+  showAgentCli(): void {
+    if (!this.actions.files.confirmLeave()) return;
+    this.actions.files.hide(); this.actions.snippets.hide(); this.forwarding.hide(); this.actions.keychain.hide();
+    this.isHome = false; this.root.hidden = false;
+    this.get('.home-content').hidden = true;
+    document.getElementById('app')!.hidden = true;
+    document.body.dataset.view = 'agent-cli'; this.selectNavigation('rail-agent-cli');
+    this.get('#rail-agent-cli').scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    this.globe?.setActive(false); this.agentCli.show();
   }
 
   private selectNavigation(id: string): void {

@@ -4,7 +4,7 @@
 
 ## 安装与登录
 
-服务端须先部署包含 CLI 协议的版本（当前为 [PR #10](https://github.com/aozorae/EdgeSSH/pull/10)），再在本机执行：
+服务端须先更新到支持大文件上传的版本，再安装 CLI 0.2.0 或更新版本。旧 CLI 0.1.0 仍限制 64 MiB；新 CLI 的文件传输期限也需要配套服务端：
 
 ```sh
 npm install --global @aozorae/edgessh
@@ -80,9 +80,16 @@ CLI 配置默认位于 `$XDG_CONFIG_HOME/edgessh/config.json`，未设置时为 
 - 一次远端操作通常调用主机列表、凭据读取、会话票据三个 HTTP 接口，再创建一个 SSH WebSocket / Durable Object。SFTP 在同一 SSH TCP 连接上附加一个文件 WebSocket 和 SFTP 子通道。
 - `exec` 和 SFTP 模式不打开 PTY、Shell、系统信息探测或进程监控。交互式 `connect` 沿用网页终端行为。
 - 成功、错误、超时、SIGINT/SIGTERM 都会关闭本地 WebSocket，复用 Durable Object 原有的关闭清理释放 SSH TCP。SSH 命令结束也会主动关闭服务端会话。
-- `exec` 默认最长 60 秒；文件和交互连接默认最长 600 秒。`--timeout 1..600` 可调整。服务端同样执行会话期限，客户端强制退出或断网时也有最长存活边界。SSH 的握手、加密、传输依然消耗 Workers/DO 资源；大文件、密集命令和长期交互不会免费。
+- `exec` 默认最长 60 秒，交互和其他命令默认 600 秒，均可用 `--timeout 1..600` 调整。`get/put` 默认 6 小时（21600 秒），可用 `--timeout 1..86400` 调整，包含认证与建连时间。服务端同样执行会话期限，客户端强制退出或断网时也有最长存活边界。SSH 的握手、加密、传输依然消耗 Workers/DO 资源；大文件、密集命令和长期交互不会免费。
 - CLI 默认最多接收 1 MiB 命令输出，`--max-output` 可调整到 16 MiB；服务端另有 16 MiB 硬上限。超限会报错并断开，不把截断结果标成成功。Agent 应优先用 `tail`、`head` 等缩小输出。
-- 文件沿用现有单文件 64 MiB 限制，流式处理、上传逐块确认。下载成功后才原子落到目标路径，失败删除 `.part` 临时文件。上传下载默认拒绝覆盖，显式 `--force` 才允许。
+- 上传单文件最多 2 GiB，下载最多 64 MiB。上传按 64 KiB 流式读取，服务端协商后最多 8 块（512 KiB）在途，只有收到全部写入确认才提交成功，不按文件体积预分配内存。下载成功后才原子落到目标路径，失败删除 `.part` 临时文件。上传下载默认拒绝覆盖，显式 `--force` 才允许。
+
+```sh
+edgessh put HOST_ID ./backup.tar /tmp/backup.tar
+edgessh put HOST_ID ./backup.tar /tmp/backup.tar --timeout 86400
+```
+
+大文件上传没有断点续传或自动重试；保持本地进程和网络连接。取消或强制退出后先检查远端状态，断网可能留下半文件或覆盖上传的临时文件，不能视为自动回滚。传输仍受远端磁盘、权限及 SSH 服务端策略约束；当前 SSH 会话不支持重新密钥交换（rekey），服务端主动要求 rekey 时需重新连接。
 
 上传覆盖要求服务器支持 `posix-rename@openssh.com` v1（OpenSSH 支持）。不支持时会报错并清理上传临时文件，保留原目标，不会先删除原文件。
 

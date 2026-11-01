@@ -136,7 +136,8 @@ export function parseConnectMessage(value: unknown): SSHConnectionConfig {
   if (Object.keys(raw).some((field) => !allowedFields.has(field))) throw new Error('Unsupported connection field');
   if (raw.mode !== undefined && (typeof raw.mode !== 'string' || !['forward', 'exec', 'sftp'].includes(raw.mode))) throw new Error('Invalid connection mode');
   if (raw.mode === 'exec' ? typeof raw.command !== 'string' || !raw.command.length || raw.command.length > 32 * 1024 || raw.command.includes('\0') : raw.command !== undefined) throw new Error('Invalid exec command');
-  if (raw.timeoutMs !== undefined && (typeof raw.timeoutMs !== 'number' || !Number.isInteger(raw.timeoutMs) || raw.timeoutMs < 1000 || raw.timeoutMs > 600_000)) throw new Error('Invalid session timeout');
+  const maxTimeoutMs = raw.mode === 'sftp' ? 86_400_000 : 600_000;
+  if (raw.timeoutMs !== undefined && (typeof raw.timeoutMs !== 'number' || !Number.isInteger(raw.timeoutMs) || raw.timeoutMs < 1000 || raw.timeoutMs > maxTimeoutMs)) throw new Error('Invalid session timeout');
   const size = normalizeTerminalSize(raw.cols ?? 120, raw.rows ?? 40);
   if (!size) throw new Error('Invalid terminal size');
 

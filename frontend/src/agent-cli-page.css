@@ -1,0 +1,30 @@
+body[data-view='agent-cli'] { height: auto; min-height: 100dvh; overflow-y: auto; background: var(--home-bg); }
+body[data-view='agent-cli'] #dashboard :is(.home-search, .header-add) { display: none; }
+body[data-view='agent-cli'] .home-account { margin-left: auto; }
+.agent-cli-page { min-width: 0; width: 100%; max-width: 1100px; margin-inline: auto; padding: 32px; letter-spacing: 0; }
+.agent-cli-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.agent-cli-heading h1 { margin: 0; font-size: 26px; letter-spacing: 0; }
+.agent-cli-page p { color: var(--home-muted); line-height: 1.8; overflow-wrap: anywhere; }
+.agent-cli-heading p { margin: 8px 0 0; }
+#dashboard .agent-cli-heading a { gap: 8px; min-height: 44px; text-decoration: none; }
+#dashboard .agent-cli-heading svg { width: 16px; height: 16px; }
+.agent-cli-requirements { margin: 16px 0 28px; font: 12px/1.8 var(--home-mono); }
+.agent-cli-steps > section { padding: 22px 0; border-top: 1px solid var(--home-line); }
+.agent-cli-page h2 { margin: 0 0 10px; font-size: 16px; letter-spacing: 0; }
+.agent-cli-page section > p { margin: 8px 0 14px; }
+.agent-cli-page a { text-underline-offset: 3px; }
+.agent-cli-command { display: flex; align-items: flex-start; min-width: 0; border: 1px solid var(--home-line); border-radius: 6px; background: var(--home-surface); }
+.agent-cli-command pre { flex: 1; min-width: 0; margin: 0; padding: 16px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--home-ink); font: 13px/1.8 var(--home-mono); }
+.agent-cli-command code { font: inherit; }
+#dashboard .agent-cli-copy { display: grid; place-items: center; flex: 0 0 44px; width: 44px; height: 44px; margin: 4px; padding: 0; border-radius: 4px; color: var(--home-muted); background: transparent; }
+#dashboard .agent-cli-copy:hover { background: var(--home-bg); color: var(--home-accent-hover); }
+#dashboard .agent-cli-copy svg { width: 18px; height: 18px; }
+.agent-cli-reference { padding: 22px 0; border-block: 1px solid var(--home-line); }
+.agent-cli-boundaries { padding-top: 12px; font-size: 12px; }
+.agent-cli-copy-status { min-height: 26px; margin: 0; }
+@media (max-width: 600px) {
+  .agent-cli-page { padding: 24px 16px; }
+  .agent-cli-heading { flex-wrap: wrap; }
+  .agent-cli-command pre { padding: 12px; font-size: 12px; }
+  .agent-cli-instructions pre { font-family: var(--home-font); font-size: 13px; }
+}

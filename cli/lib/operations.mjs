@@ -119,18 +119,26 @@ export async function upload(channel, local, remote, force) {
   const file = await open(local, 'r');
   try {
     const { size } = await file.stat();
-    if (!Number.isSafeInteger(size) || size > 64 * 1024 * 1024) throw new Error('File exceeds 64 MiB');
+    if (!Number.isSafeInteger(size) || size > 2 * 1024 * 1024 * 1024) throw new Error('File exceeds 2 GiB');
     channel.send({ type: 'sftp_upload_start', requestId: 'cli', path: remote, size, overwrite: force });
-    await channel.until('sftp_upload_ready');
-    const buffer = Buffer.alloc(64 * 1024);
-    let position = 0;
-    while (position < size) {
-      const { bytesRead } = await file.read(buffer, 0, Math.min(buffer.length, size - position), position);
-      if (!bytesRead) throw new Error('Local file changed during upload');
-      channel.send(buffer.subarray(0, bytesRead));
+    const ready = await channel.until('sftp_upload_ready');
+    // 旧服务端仍逐块发送；新服务端协商 8 块窗口，内存不随文件大小增长。
+    const window = ready.maxInFlightChunks === 8 ? 8 : 1;
+    const pending = [];
+    let sent = 0, acknowledged = 0;
+    while (acknowledged < size) {
+      while (sent < size && pending.length < window) {
+        // ws.send 可能尚未写完，不能复用并改写上一块的缓冲区。
+        const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, size - sent));
+        const { bytesRead } = await file.read(buffer, 0, buffer.length, sent);
+        if (!bytesRead) throw new Error('Local file changed during upload');
+        sent += bytesRead;
+        pending.push(sent);
+        channel.send(buffer.subarray(0, bytesRead));
+      }
       const progress = await channel.until('sftp_upload_progress');
-      position += bytesRead;
-      if (progress.loaded !== position) throw new Error('Upload acknowledgement mismatch');
+      if (progress.loaded !== pending.shift()) throw new Error('Upload acknowledgement mismatch');
+      acknowledged = progress.loaded;
     }
     channel.send({ type: 'sftp_upload_end', requestId: 'cli' });
     return await channel.until('sftp_upload_complete');
