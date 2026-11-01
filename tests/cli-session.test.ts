@@ -35,6 +35,14 @@ test('CLI modes require bounded lifetimes and an exec command only for exec', ()
   assert.equal(parseConnectMessage(base).timeoutMs, undefined);
   for (const extra of [{ mode: 'exec' }, { mode: 'sftp', command: 'true' }, { timeoutMs: 0 }, { timeoutMs: 600_001 }, { mode: 'exec', command: '\0' }]) assert.throws(() => parseConnectMessage({ ...base, ...extra }));
 });
+test('long file transfers allow up to 24 hours without extending exec or terminal lifetimes', () => {
+  for (const timeoutMs of [21_600_000, 86_400_000]) {
+    assert.equal(parseConnectMessage({ ...base, mode: 'sftp', timeoutMs }).timeoutMs, timeoutMs);
+    assert.throws(() => parseConnectMessage({ ...base, mode: 'exec', command: 'true', timeoutMs }));
+    assert.throws(() => parseConnectMessage({ ...base, timeoutMs }));
+  }
+  assert.throws(() => parseConnectMessage({ ...base, mode: 'sftp', timeoutMs: 86_400_001 }));
+});
 test('exec uses no PTY/probe, separates streams, reads exit status, and closes TCP', async () => {
   const f = fixture('exec', { command: 'printf hello; exit 7' });
   await f.session.handleAuth(52, new Uint8Array([52]));

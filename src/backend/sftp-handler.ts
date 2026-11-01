@@ -15,8 +15,11 @@ const MAX_PATH_BYTES = 4096;
 const MAX_DIRECTORY_ENTRIES = 2000;
 const MAX_DIRECTORY_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_FILENAME_BYTES = 1024;
-const MAX_FILE_SIZE = 64 * 1024 * 1024;
+const MAX_DOWNLOAD_SIZE = 64 * 1024 * 1024;
+const MAX_UPLOAD_SIZE = 2 * 1024 * 1024 * 1024;
 const TRANSFER_CHUNK_SIZE = 64 * 1024;
+// 最多 512 KiB 在途，留出 session 的 1 MiB 上传队列余量。
+const UPLOAD_WINDOW_CHUNKS = 8;
 
 type SendChannelData = (channel: SSHChannel, chunk: ChannelDataChunk) => Promise<void>;
 type SendJSON = (message: unknown) => void;
@@ -158,7 +161,7 @@ export class SFTPHandler {
       const attrs = await this.client.stat(path);
       this.assertDownloadActive(download);
       const size = this.safeSize(attrs);
-      if (size !== null && size > MAX_FILE_SIZE) throw new Error('File exceeds the 64 MiB transfer limit');
+      if (size !== null && size > MAX_DOWNLOAD_SIZE) throw new Error('File exceeds the 64 MiB download limit');
       handle = await this.client.openFile(path, SFTP_OPEN_FLAGS.READ);
       this.assertDownloadActive(download);
       const filename = path.split('/').filter(Boolean).pop() || 'download';
@@ -173,7 +176,7 @@ export class SFTPHandler {
         const chunk = await this.client.readFile(handle, offset, length);
         this.assertDownloadActive(download);
         if (chunk === null || chunk.length === 0) break;
-        if (offset + chunk.length > MAX_FILE_SIZE) throw new Error('File exceeds the 64 MiB transfer limit');
+        if (offset + chunk.length > MAX_DOWNLOAD_SIZE) throw new Error('File exceeds the 64 MiB download limit');
         this.sendBinary(chunk);
         offset += chunk.length;
         this.sendJSON(size === null
@@ -244,7 +247,7 @@ export class SFTPHandler {
       this.assertReady();
       this.validatePath(path);
       if (this.upload) throw new Error('Another upload is already in progress');
-      if (!Number.isSafeInteger(size) || size < 0 || size > MAX_FILE_SIZE) throw new Error('Invalid upload size or file exceeds the 64 MiB transfer limit');
+      if (!Number.isSafeInteger(size) || size < 0 || size > MAX_UPLOAD_SIZE) throw new Error('Invalid upload size or file exceeds the 2 GiB upload limit');
       const permissions = overwrite ? await this.destinationPermissions(path, expectedMtime) : undefined;
       const uploadPath = overwrite ? this.temporaryUploadPath(path) : path;
       // 覆盖写：临时文件直接按原文件权限位创建，rename 后权限与创建前一致。
@@ -264,7 +267,7 @@ export class SFTPHandler {
         temporary: overwrite,
         expectedMtime,
       };
-      this.sendJSON({ type: 'sftp_upload_ready', requestId, path, size });
+      this.sendJSON({ type: 'sftp_upload_ready', requestId, path, size, maxInFlightChunks: UPLOAD_WINDOW_CHUNKS });
     } catch (error) {
       this.reportError('upload', error, requestId);
     }

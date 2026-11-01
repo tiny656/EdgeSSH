@@ -7,6 +7,7 @@ import { expectedMtimeFor, nextMtimeBaseline } from './editor-mtime';
 import type { StorageLike } from './file-paths';
 
 export const MAX_SFTP_FILE_SIZE = 64 * 1024 * 1024;
+export const MAX_SFTP_UPLOAD_SIZE = 2 * 1024 * 1024 * 1024;
 export const SFTP_UPLOAD_CHUNK_SIZE = 64 * 1024;
 
 export interface FileManagerElements {
@@ -94,7 +95,9 @@ interface UploadState {
   editorDone?: (completed: boolean) => void;
   sent: number;
   acknowledged: number;
-  awaitingAck: boolean;
+  sending: boolean;
+  windowChunks: number;
+  pendingEnds: number[];
   endSent: boolean;
   readyForData: boolean;
   cancelling: boolean;
@@ -555,8 +558,8 @@ export class FileManager {
 
   async upload(file: File, destination?: string): Promise<void> {
     if (!this.ready || this.hasTransfer() || this.uploadConfirmationPending) return;
-    if (file.size > MAX_SFTP_FILE_SIZE) {
-      this.showError(this.localize({ zh: '文件不能超过 64 MiB。', en: 'Files cannot exceed 64 MiB.' }));
+    if (file.size > MAX_SFTP_UPLOAD_SIZE) {
+      this.showError(this.localize({ zh: '上传文件不能超过 2 GiB。', en: 'Uploads cannot exceed 2 GiB.' }));
       return;
     }
     let path: string;
@@ -597,7 +600,9 @@ export class FileManager {
       path,
       sent: 0,
       acknowledged: 0,
-      awaitingAck: false,
+      sending: false,
+      windowChunks: 1,
+      pendingEnds: [],
       endSent: false,
       readyForData: false,
       cancelling: false,
@@ -813,7 +818,9 @@ export class FileManager {
       editorDone: done,
       sent: 0,
       acknowledged: 0,
-      awaitingAck: false,
+      sending: false,
+      windowChunks: 1,
+      pendingEnds: [],
       endSent: false,
       readyForData: false,
       cancelling: false,
@@ -1476,6 +1483,7 @@ export class FileManager {
     const state = this.matchUpload(message);
     if (!state || state.sent !== 0) return;
     state.readyForData = true;
+    state.windowChunks = message.maxInFlightChunks === 8 ? 8 : 1;
     if (state.cancelling) {
       this.sendUploadCancel(state);
       return;
@@ -1487,8 +1495,13 @@ export class FileManager {
     const state = this.matchUpload(message);
     if (!state) return;
     const acknowledged = numberValue(message.loaded) ?? numberValue(message.transferred) ?? numberValue(message.received) ?? numberValue(message.bytes) ?? state.sent;
-    state.acknowledged = Math.min(state.source.size, Math.max(state.acknowledged, acknowledged));
-    state.awaitingAck = false;
+    // 每次确认必须对应最早的完整块，不能让部分或重复 ACK 提前释放窗口。
+    if (acknowledged !== state.pendingEnds.shift()) {
+      this.sendUploadCancel(state);
+      this.failTransfer(this.localize({ zh: '上传确认进度不匹配，传输已停止。', en: 'Upload acknowledgement mismatch; transfer stopped.' }));
+      return;
+    }
+    state.acknowledged = acknowledged;
     this.showProgress('upload', state.source.name, state.source.size === 0 ? 100 : (state.acknowledged / state.source.size) * 100);
     if (state.cancelling) {
       this.sendUploadCancel(state);
@@ -1499,19 +1512,31 @@ export class FileManager {
 
   private async sendNextUploadChunk(state: UploadState): Promise<void> {
     if (state !== this.uploadState || state.generation !== this.generation || !state.readyForData
-      || state.cancelling || state.awaitingAck || state.endSent || !this.isSocketOpen()) return;
-    if (state.sent >= state.source.size) {
-      state.endSent = true;
-      this.updateProgressLanguage();
-      this.send({ type: 'sftp_upload_end', requestId: state.requestId });
-      return;
-    }
-    const end = Math.min(state.source.size, state.sent + SFTP_UPLOAD_CHUNK_SIZE);
-    const chunk = await state.source.slice(state.sent, end);
-    if (state !== this.uploadState || state.generation !== this.generation || state.cancelling || !this.isSocketOpen()) return;
-    this.socket!.send(chunk);
-    state.sent = end;
-    state.awaitingAck = true;
+      || state.cancelling || state.sending || state.endSent || !this.isSocketOpen()) return;
+    state.sending = true;
+    try {
+      // 只预读协商窗口内的小块；大文件不会整体进入浏览器或 Worker 内存。
+      while (state.sent < state.source.size && state.pendingEnds.length < state.windowChunks) {
+        const end = Math.min(state.source.size, state.sent + SFTP_UPLOAD_CHUNK_SIZE);
+        const chunk = await state.source.slice(state.sent, end);
+        if (state !== this.uploadState || state.generation !== this.generation || state.cancelling || !this.isSocketOpen()) return;
+        if (chunk.byteLength !== end - state.sent) throw new Error('Local file changed during upload');
+        state.sent = end;
+        state.pendingEnds.push(end);
+        this.socket!.send(chunk);
+      }
+      // 所有字节得到远端写入确认后才提交，避免把“已发送”误报为成功。
+      if (state.acknowledged === state.source.size) {
+        state.endSent = true;
+        this.updateProgressLanguage();
+        this.send({ type: 'sftp_upload_end', requestId: state.requestId });
+      }
+    } catch (error) {
+      if (state === this.uploadState) {
+        this.sendUploadCancel(state);
+        this.failTransfer(error instanceof Error ? error.message : String(error));
+      }
+    } finally { state.sending = false; }
   }
 
   private handleUploadComplete(message: JsonRecord): void {

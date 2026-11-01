@@ -230,3 +230,42 @@ test('truncated text is not presented as a complete editable document', async ()
   assert.equal(messages.at(-1)!.type, 'sftp_error');
   assert.ok(!messages.some((item) => item.type === 'sftp_read_text_result'));
 });
+
+test('large uploads accept the 2 GiB boundary with bounded chunks and cancellation cleanup', async () => {
+  const { client, messages, handler } = setup();
+  const limit = 2 * 1024 * 1024 * 1024;
+  await handler.startUpload('large', '/root/large.bin', limit, false);
+  assert.equal(messages[0].type, 'sftp_upload_ready');
+  assert.equal(messages[0].maxInFlightChunks, 8);
+  // 不分配 2 GiB 测试内存，直接检验接近边界的 offset 和累计确认值。
+  (handler as any).upload.received = limit - 64 * 1024;
+  await handler.uploadChunk(new Uint8Array(64 * 1024));
+  assert.deepEqual(client.writes, [{ offset: limit - 64 * 1024, length: 64 * 1024 }]);
+  assert.equal(messages.at(-1)!.loaded, limit);
+  await handler.cancelUpload('large');
+  assert.deepEqual(client.removed, ['/root/large.bin']);
+  assert.equal(messages.at(-1)!.type, 'sftp_upload_cancelled');
+});
+
+test('oversized uploads fail before opening a file and downloads keep their memory-safe limit', async () => {
+  const { client, messages, handler } = setup();
+  await handler.startUpload('too-large', '/root/large.bin', 2 * 1024 * 1024 * 1024 + 1, false);
+  assert.equal(client.opened.length, 0);
+  assert.match(messages.at(-1)!.message, /2 GiB/);
+  client.attrs.size = 65 * 1024 * 1024;
+  await handler.download('download', '/root/large.bin');
+  assert.equal(client.opened.length, 0);
+  assert.match(messages.at(-1)!.message, /64 MiB download/);
+});
+
+test('large overwrite cancellation removes only its temporary file', async () => {
+  const { client, messages, handler } = setup();
+  await handler.startUpload('cancel', '/root/original.bin', 80 * 1024 * 1024, true);
+  const temporary = client.opened[0].path;
+  await handler.uploadChunk(new Uint8Array(64 * 1024));
+  await handler.cancelUpload('cancel');
+  assert.deepEqual(client.removed, [temporary]);
+  assert.notEqual(temporary, '/root/original.bin');
+  assert.equal(client.renames.length, 0);
+  assert.equal(messages.at(-1)!.type, 'sftp_upload_cancelled');
+});

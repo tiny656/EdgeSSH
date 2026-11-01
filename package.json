@@ -16,7 +16,8 @@
     "deploy:validate": "node --experimental-strip-types scripts/deploy.ts --validate-only",
     "deploy": "node --experimental-strip-types scripts/deploy.ts",
     "test:cli": "npm --prefix cli test",
-    "test:cli:ssh": "node --test tests/cli-ssh.integration.mjs"
+    "test:cli:ssh": "node --test tests/cli-ssh.integration.mjs",
+    "test:cli:production": "node scripts/test-cli-production.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

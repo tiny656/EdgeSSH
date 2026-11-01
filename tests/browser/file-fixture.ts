@@ -12,7 +12,7 @@ const entry = (name: string, type = 'file', size = 12) => ({
 });
 
 // 只在测试浏览器内模拟 API/协议，不访问真实主机、不增加生产认证绕过。
-export async function fileFixture(page: Page, options: { firstSeen?: boolean; credentialError?: boolean; noHosts?: boolean; holdUpload?: boolean; omitUploadMtime?: boolean; saveError?: boolean; readError?: boolean; waitUntil?: 'load' | 'domcontentloaded' } = {}) {
+export async function fileFixture(page: Page, options: { firstSeen?: boolean; credentialError?: boolean; noHosts?: boolean; holdUpload?: boolean; omitUploadMtime?: boolean; saveError?: boolean; readError?: boolean; uploadWindow?: number; holdUploadAcks?: boolean; discardUploadBody?: boolean; waitUntil?: 'load' | 'domcontentloaded' } = {}) {
   const hosts = options.noHosts ? [] : [host('alpha', 'Tokyo production', '192.0.2.10'), host('beta', 'Singapore backup', '192.0.2.20')];
   const directories = new Map([
     ['/', [entry('root', 'directory')]],
@@ -24,6 +24,7 @@ export async function fileFixture(page: Page, options: { firstSeen?: boolean; cr
   const sshSockets: WebSocketRoute[] = [];
   const sftpSockets: WebSocketRoute[] = [];
   const uploaded: Buffer[] = [];
+  const uploadStats = { bytes: 0, chunks: 0, maxChunk: 0 };
   // 在线编辑器读取/保存的远端文本文件；mtime 用于冲突校验，测试可直接改它模拟他人修改。
   const textFiles = new Map([
     ['/root/README.md', { content: '# Edge SSH\n\n<script>window.__xss = 1</script>\n\n[bad](javascript:alert(1))\n', mtime: 1_790_100_000 }],
@@ -69,8 +70,11 @@ export async function fileFixture(page: Page, options: { firstSeen?: boolean; cr
     const name = (path: string) => path.slice(path.lastIndexOf('/') + 1);
     ws.onMessage((raw) => {
       if (typeof raw !== 'string') {
-        uploaded.push(Buffer.from(raw));
-        send({ type: 'sftp_upload_progress', requestId: upload!.requestId, loaded: uploaded.reduce((sum, chunk) => sum + chunk.length, 0) });
+        uploadStats.bytes += raw.length;
+        uploadStats.chunks++;
+        uploadStats.maxChunk = Math.max(uploadStats.maxChunk, raw.length);
+        if (!options.discardUploadBody) uploaded.push(Buffer.from(raw));
+        if (!options.holdUploadAcks) send({ type: 'sftp_upload_progress', requestId: upload!.requestId, loaded: uploadStats.bytes });
         return;
       }
       const message = JSON.parse(raw);
@@ -112,8 +116,10 @@ export async function fileFixture(page: Page, options: { firstSeen?: boolean; cr
         }
         upload = message;
         uploaded.length = 0;
-        if (!options.holdUpload) send({ type: 'sftp_upload_ready', requestId });
+        Object.assign(uploadStats, { bytes: 0, chunks: 0, maxChunk: 0 });
+        if (!options.holdUpload) send({ type: 'sftp_upload_ready', requestId, maxInFlightChunks: options.uploadWindow });
       }
+      if (type === 'sftp_upload_cancel') send({ type: 'sftp_upload_cancelled', requestId });
       if (type === 'sftp_upload_end') {
         const list = directories.get(parent(upload!.path))!;
         const existing = list.find((item) => item.name === name(upload!.path));
@@ -140,7 +146,7 @@ export async function fileFixture(page: Page, options: { firstSeen?: boolean; cr
   });
   await page.goto('/', { waitUntil: options.waitUntil ?? 'load' });
   await page.locator('#rail-files').click();
-  return { hosts, calls, sshSockets, sftpSockets, uploaded, directories, textFiles };
+  return { hosts, calls, sshSockets, sftpSockets, uploaded, uploadStats, directories, textFiles };
 }
 
 export async function connectFiles(page: Page, id = 'alpha') {
